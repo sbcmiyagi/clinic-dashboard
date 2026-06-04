@@ -1291,7 +1291,14 @@ function runSnapshot() {{
 
   let html = `<p style="font-size:13px;color:#666;margin-bottom:8px"><b>${{year}}年${{parseInt(month)}}月末時点：${{filtered.length}}院</b></p>`;
 
-  Object.entries(grouped).sort((a,b) => a[0].localeCompare(b[0], 'ja')).forEach(([brand, clinics], idx) => {{
+  Object.entries(grouped).sort((a,b) => {{
+    const ia = UNIQUE_BRANDS.indexOf(a[0]);
+    const ib = UNIQUE_BRANDS.indexOf(b[0]);
+    if (ia === -1 && ib === -1) return a[0].localeCompare(b[0], 'ja');
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  }}).forEach(([brand, clinics], idx) => {{
     const uid = 'snap' + idx;
     html += `<div style="margin-bottom:6px;border:1px solid #ddd;border-radius:6px;overflow:hidden">`;
     html += `<div onclick="toggleAcc('${{uid}}a','${{uid}}r')" style="padding:8px 14px;cursor:pointer;background:#f8f9fa;display:flex;justify-content:space-between;align-items:center">`;
