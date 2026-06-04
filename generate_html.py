@@ -909,9 +909,18 @@ def generate():
   .period-bar select{{padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px}}
   .period-bar button{{padding:6px 16px;background:{C_BLUE};color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px}}
   .period-bar button:hover{{background:#1a6fa8}}
-  .tabs{{display:flex;background:white;border-bottom:2px solid #ddd;padding:0 30px;flex-wrap:wrap}}
-  .tab{{padding:12px 20px;cursor:pointer;border-bottom:3px solid transparent;font-size:14px;color:#666}}
-  .tab.active{{border-bottom-color:{C_BLUE};color:{C_BLUE};font-weight:bold}}
+  .tabs{{display:flex;background:#f0f2f5;padding:10px 20px;flex-wrap:wrap;gap:8px;border-bottom:1px solid #ddd}}
+  .tab{{padding:7px 16px;cursor:pointer;border-radius:20px;font-size:13px;font-weight:bold;
+        color:white;opacity:0.6;transition:opacity 0.2s,box-shadow 0.2s;white-space:nowrap}}
+  .tab:hover{{opacity:0.85}}
+  .tab.active{{opacity:1;box-shadow:0 2px 8px rgba(0,0,0,0.25)}}
+  .tab-brand{{background:#2980B9}}
+  .tab-region{{background:#27AE60}}
+  .tab-houjin{{background:#8E44AD}}
+  .tab-trend{{background:#E67E22}}
+  .tab-history{{background:#E74C3C}}
+  .tab-convert{{background:#16A085}}
+  .tab-snapshot{{background:#2C3E50}}
   .content{{display:none;padding:24px 30px}}
   .content.active{{display:block}}
   .section-title{{background:{C_GREEN};padding:8px 14px;font-weight:bold;border-radius:4px;margin-bottom:12px}}
@@ -946,13 +955,13 @@ def generate():
 </div>
 
 <div class="tabs">
-  <div class="tab active" onclick="showTab('brand',this)">📋 ブランド×業態</div>
-  <div class="tab" onclick="showTab('region',this)">🌏 国内／海外×法人</div>
-  <div class="tab" onclick="showTab('houjin',this)">🏢 法人別（月初時点／経理用）</div>
-  <div class="tab" onclick="showTab('trend',this)">📈 時系列推移</div>
-  <div class="tab" onclick="showTab('history',this)">🏥 開院・閉院履歴</div>
-  <div class="tab" onclick="showTab('convert',this)">🔵 業態転換履歴</div>
-  <div class="tab" onclick="showTab('snapshot',this)">📍 月次断面</div>
+  <div class="tab tab-brand active" onclick="showTab('brand',this)">📋 ブランド別 集計（月末時点）</div>
+  <div class="tab tab-region" onclick="showTab('region',this)">🌏 地域・法人別 集計（月末時点）</div>
+  <div class="tab tab-houjin" onclick="showTab('houjin',this)">🏢 法人別 院数（月初時点）</div>
+  <div class="tab tab-trend" onclick="showTab('trend',this)">📅 年月別 院数サマリー</div>
+  <div class="tab tab-history" onclick="showTab('history',this)">🏥 開院・閉院履歴</div>
+  <div class="tab tab-convert" onclick="showTab('convert',this)">🔵 業態転換履歴</div>
+  <div class="tab tab-snapshot" onclick="showTab('snapshot',this)">🏥 在院一覧（月末時点）</div>
 </div>
 
 <div id="brand" class="content active">
