@@ -363,44 +363,87 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             try:
                 clinic_id_map[name] = int(float(str(cid)))
             except: pass
+
+    # 業態転換ペアを特定: {旧院名: (新院名, 業態転換年月)}
+    conversion_map = {}    # 旧院名 → (新院名, 転換年月)
+    converted_new = set()  # 転換後の院名（新）
+    for _, row in clinic_df.iterrows():
+        d_conv = to_ts(row.get("業態転換日"))
+        new_name = str(row.get("転換後院名","") or "").strip()
+        old_name = str(row.get("正式名称","") or "").strip()
+        if d_conv and new_name and old_name:
+            conv_month = f"{d_conv.year}/{d_conv.month:02d}"
+            conversion_map[old_name] = (new_name, conv_month)
+            converted_new.add(new_name)
+
     # 院IDがある院は院ID順、ない院は末尾に名前順
     clinics_sorted = sorted(
         clinics_with_data,
         key=lambda c: (clinic_id_map.get(c, 999999), c)
     )
+    # 転換後の院は独立表示しない（旧院の直後に表示するため除外）
+    clinics_sorted_main = [c for c in clinics_sorted if c not in converted_new]
 
     # Build HTML table
     th_style = f'padding:6px 10px;border:1px solid #555;background:{C_HEADER};color:white;white-space:nowrap;font-size:12px'
 
-    headers = f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:30px">院ID</th>'
+    headers = f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:40px">院ID</th>'
     headers += f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:180px">院名</th>'
     for mk in months:
         headers += f'<th style="{th_style};min-width:80px">{mk}</th>'
 
-    # Rows
-    rows_html = ""
-    for clinic in clinics_sorted:
+    def make_clinic_row(clinic, limit_before=None, limit_from=None, row_bg="white"):
+        """1院分の行HTMLを生成。limit_before=この月より後は空白、limit_from=この月より前は空白"""
         prev_doctor = ""
         cid_val = clinic_id_map.get(clinic, "")
-        cells  = f'<td style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:0;background:white;font-size:12px;text-align:right;color:#666;z-index:1">{cid_val}</td>'
-        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:white;font-size:12px;white-space:nowrap;z-index:1">{clinic}</td>'
+        cells  = f'<td style="padding:5px 8px;border:1px solid #ddd;background:{row_bg};font-size:12px;text-align:right;color:#666">{cid_val}</td>'
+        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:{row_bg};font-size:12px;white-space:nowrap">{clinic}</td>'
         for mk in months:
+            # 業態転換による表示範囲制限
+            if limit_before and mk >= limit_before:
+                cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:#f0f0f0;font-size:12px"></td>'
+                continue
+            if limit_from and mk < limit_from:
+                cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:#f0f0f0;font-size:12px"></td>'
+                continue
             doctor = monthly_states.get(mk, {}).get(clinic, "")
             changed = doctor and doctor != prev_doctor and prev_doctor != ""
             if not doctor:
                 bg = "#f8f9fa"; color = "#ccc"; txt = "―"
             elif changed:
-                bg = "#FFF9C4"; color = "#333"; txt = doctor  # yellow = changed
+                bg = "#FFF9C4"; color = "#333"; txt = doctor
             else:
-                bg = "white"; color = "#333"; txt = doctor
+                bg = row_bg if row_bg != "white" else "white"; color = "#333"; txt = doctor
             cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:{bg};color:{color};font-size:12px;white-space:nowrap;text-align:center">{txt}</td>'
             if doctor: prev_doctor = doctor
-        rows_html += f"<tr>{cells}</tr>"
+        return f"<tr>{cells}</tr>"
 
-    legend = '''<div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;align-items:center">
+    # Rows
+    rows_html = ""
+    for clinic in clinics_sorted_main:
+        if clinic in conversion_map:
+            new_name, conv_month = conversion_map[clinic]
+            # 転換前の行（転換月より前のみ）
+            rows_html += make_clinic_row(clinic, limit_before=conv_month, row_bg="white")
+            # 区切り行：業態転換マーカー
+            n_cols = len(months) + 2
+            rows_html += (
+                f'<tr><td colspan="{n_cols}" style="padding:2px 10px;background:#E8DAEF;'
+                f'color:#6c3483;font-size:11px;text-align:center">▼ 業態転換 {conv_month} ▼</td></tr>'
+            )
+            # 転換後の行（転換月以降のみ）
+            if new_name in clinics_with_data:
+                rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F8F0FF")
+        else:
+            rows_html += make_clinic_row(clinic)
+
+    legend = '''<div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;align-items:center;flex-wrap:wrap">
       <span>凡例：</span>
       <span style="background:#FFF9C4;padding:2px 8px;border:1px solid #ddd">院長交代</span>
       <span style="background:white;padding:2px 8px;border:1px solid #ddd">継続</span>
+      <span style="background:#E8DAEF;padding:2px 8px;border:1px solid #ddd;color:#6c3483">▼ 業態転換</span>
+      <span style="background:#F8F0FF;padding:2px 8px;border:1px solid #ddd">転換後の院</span>
+      <span style="background:#f0f0f0;padding:2px 8px;border:1px solid #ddd;color:#999">対象外期間</span>
       <span style="color:#ccc;padding:2px 8px;border:1px solid #ddd">―　記録なし</span>
     </div>'''
 
