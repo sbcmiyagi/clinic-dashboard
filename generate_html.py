@@ -1024,8 +1024,8 @@ def generate():
 
 <div id="snapshot" class="content">
   <div class="box">
-    <div class="section-title">月次断面 — 指定月末時点の在院一覧</div>
-    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px;padding:12px;background:#f8f9fa;border-radius:6px;border:1px solid #ddd">
+    <div class="section-title">在院一覧（月末時点）</div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;padding:12px;background:#f8f9fa;border-radius:6px;border:1px solid #ddd">
       <div>
         <div style="font-size:12px;color:#666;margin-bottom:4px">月末時点</div>
         <select id="snapYear" style="padding:4px 8px;border:1px solid #ccc;border-radius:4px"></select>年
@@ -1051,6 +1051,17 @@ def generate():
       </div>
       <button onclick="runSnapshot()" style="padding:6px 16px;background:#2980B9;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">検索</button>
       <button onclick="downloadCSV()" style="padding:6px 16px;background:#27AE60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">📥 CSV ダウンロード</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <span style="font-size:13px;color:#666">グループ表示：</span>
+      <button id="grpBrand" onclick="setGroupBy('brand')"
+        style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#2980B9;color:white;font-weight:bold">
+        ブランド別
+      </button>
+      <button id="grpHoujin" onclick="setGroupBy('houjin')"
+        style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
+        法人別
+      </button>
     </div>
     <div id="snapshotResult"><p style="color:#999;font-size:13px">月末と条件を選択して「検索」を押してください。</p></div>
   </div>
@@ -1262,6 +1273,16 @@ function checkActiveJS(clinic, targetDateStr) {{
 }}
 
 let lastSnapshotData = [];
+let currentGroupBy = 'brand';
+
+function setGroupBy(mode) {{
+  currentGroupBy = mode;
+  document.getElementById('grpBrand').style.background  = mode==='brand'  ? '#2980B9' : '#ddd';
+  document.getElementById('grpBrand').style.color       = mode==='brand'  ? 'white'   : '#333';
+  document.getElementById('grpHoujin').style.background = mode==='houjin' ? '#8E44AD' : '#ddd';
+  document.getElementById('grpHoujin').style.color      = mode==='houjin' ? 'white'   : '#333';
+  if (lastSnapshotData.length) renderSnapshot(lastSnapshotData);
+}}
 
 function runSnapshot() {{
   const year = document.getElementById('snapYear').value;
@@ -1290,35 +1311,55 @@ function runSnapshot() {{
     container.innerHTML = '<p style="color:#c0392b;font-size:13px">該当する院がありません。</p>';
     return;
   }}
+  renderSnapshot(filtered);
+}}
 
-  // Group by brand
+function renderSnapshot(filtered) {{
+  const container = document.getElementById('snapshotResult');
+  const year  = document.getElementById('snapYear').value;
+  const month = document.getElementById('snapMonth').value;
+  const isByHoujin = currentGroupBy === 'houjin';
+
+  // グループキーと表示名
+  const getKey  = c => isByHoujin ? (c.houjin || '（法人名なし）') : c.brand;
+  const hdrBg   = isByHoujin ? '#8E44AD' : '#2C3E50';
+
+  // グループ化
   const grouped = {{}};
   filtered.forEach(c => {{
-    if (!grouped[c.brand]) grouped[c.brand] = [];
-    grouped[c.brand].push(c);
+    const k = getKey(c);
+    if (!grouped[k]) grouped[k] = [];
+    grouped[k].push(c);
+  }});
+
+  // ソート
+  const sorted = Object.entries(grouped).sort((a,b) => {{
+    if (!isByHoujin) {{
+      const ia = UNIQUE_BRANDS.indexOf(a[0]);
+      const ib = UNIQUE_BRANDS.indexOf(b[0]);
+      if (ia === -1 && ib === -1) return a[0].localeCompare(b[0], 'ja');
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    }}
+    return a[0].localeCompare(b[0], 'ja');
   }});
 
   let html = `<p style="font-size:13px;color:#666;margin-bottom:8px"><b>${{year}}年${{parseInt(month)}}月末時点：${{filtered.length}}院</b></p>`;
 
-  Object.entries(grouped).sort((a,b) => {{
-    const ia = UNIQUE_BRANDS.indexOf(a[0]);
-    const ib = UNIQUE_BRANDS.indexOf(b[0]);
-    if (ia === -1 && ib === -1) return a[0].localeCompare(b[0], 'ja');
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  }}).forEach(([brand, clinics], idx) => {{
-    const uid = 'snap' + idx;
+  sorted.forEach(([key, clinics], idx) => {{
+    const uid = 'snap' + currentGroupBy + idx;
     html += `<div style="margin-bottom:6px;border:1px solid #ddd;border-radius:6px;overflow:hidden">`;
     html += `<div onclick="toggleAcc('${{uid}}a','${{uid}}r')" style="padding:8px 14px;cursor:pointer;background:#f8f9fa;display:flex;justify-content:space-between;align-items:center">`;
-    html += `<span><span id="${{uid}}r" style="font-size:11px">▶</span> <b>${{brand}}</b>（${{clinics.length}}院）</span></div>`;
+    html += `<span><span id="${{uid}}r" style="font-size:11px">▶</span> <b>${{key}}</b>（${{clinics.length}}院）</span></div>`;
     html += `<div id="${{uid}}a" style="display:none;overflow-x:auto">`;
     html += `<table style="border-collapse:collapse;width:100%;font-size:13px">`;
-    html += `<thead><tr style="background:#2C3E50;color:white">`;
+    html += `<thead><tr style="background:${{hdrBg}};color:white">`;
     html += `<th style="padding:6px 10px;border:1px solid #555">院ID</th>`;
     html += `<th style="padding:6px 10px;border:1px solid #555">院名</th>`;
+    html += `<th style="padding:6px 10px;border:1px solid #555">ブランド</th>`;
     html += `<th style="padding:6px 10px;border:1px solid #555">業態</th>`;
-    html += `<th style="padding:6px 10px;border:1px solid #555">法人名</th>`;
+    if (!isByHoujin) html += `<th style="padding:6px 10px;border:1px solid #555">法人名</th>`;
     html += `<th style="padding:6px 10px;border:1px solid #555">国内／海外</th>`;
     html += `<th style="padding:6px 10px;border:1px solid #555">開院日</th>`;
     html += `</tr></thead><tbody>`;
@@ -1327,8 +1368,9 @@ function runSnapshot() {{
       html += `<tr style="background:${{bg}}">`;
       html += `<td style="padding:5px 10px;border:1px solid #ddd;text-align:right;color:#666">${{c.id || ''}}</td>`;
       html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.name}}</td>`;
+      html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.brand}}</td>`;
       html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.gyoutai}}</td>`;
-      html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.houjin}}</td>`;
+      if (!isByHoujin) html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.houjin}}</td>`;
       html += `<td style="padding:5px 10px;border:1px solid #ddd;text-align:center">${{c.region}}</td>`;
       html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.open_date || ''}}</td>`;
       html += `</tr>`;
