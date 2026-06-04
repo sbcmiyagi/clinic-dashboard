@@ -868,7 +868,6 @@ def generate():
             unique_brands.append(r["brand"])
             seen_brands.add(r["brand"])
     brands_json = json.dumps(unique_brands, ensure_ascii=False)
-    houjin_json = json.dumps(unique_houjin, ensure_ascii=False)
 
     # ── ブランド別棒グラフ ──
     plot_df = brand_df[brand_df["ブランド"].isin([f"{b}({g})" if g else b for b,g in brand_cols])].copy()
