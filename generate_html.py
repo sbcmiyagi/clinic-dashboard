@@ -381,11 +381,20 @@ def aggregate_with_houjin(df, target_brands, exclude_pr, me, ms):
     return r1, r2, r3, houjin_brand
 
 
-def build_all_monthly_data(df, target_brands, exclude_pr):
+def build_all_monthly_data(df, target_brands, exclude_pr, brand_cols=None, existing_flags=None):
     """
     2021/01 から今月まで各月の集計データを返す
+    brand_cols: ブランド設定シートから読んだ[(brand, gyoutai)] のリスト
+    existing_flags: 各ブランドが既存G合計に含まれるかのboolリスト
     Returns dict keyed by "YYYY/MM"
     """
+    # ブランド設定が未指定の場合はJIKEI_BRAND_COLSをフォールバックとして使用
+    if not brand_cols:
+        brand_cols = JIKEI_BRAND_COLS
+        existing_flags = [True] * EXISTING_GROUP_END + [False] * (len(JIKEI_BRAND_COLS) - EXISTING_GROUP_END)
+    if not existing_flags:
+        existing_flags = [False] * len(brand_cols)
+
     today = date.today()
     sy, sm = 2021, 1
     all_data = {}
@@ -397,9 +406,9 @@ def build_all_monthly_data(df, target_brands, exclude_pr):
 
         r1, r2, r3, houjin_brand = aggregate_with_houjin(df, target_brands, exclude_pr, me, ms_ts)
 
-        # brand_rows
+        # brand_rows（ブランド設定の順序で構築）
         brand_rows = []
-        for (brand, gyoutai) in JIKEI_BRAND_COLS:
+        for (brand, gyoutai) in brand_cols:
             if gyoutai is not None:
                 keys = [k for k in r1 if k == f"{brand}|{gyoutai}"]
             else:
@@ -412,8 +421,12 @@ def build_all_monthly_data(df, target_brands, exclude_pr):
         sum_pr = sum(row["pr"] for row in brand_rows)
         sum_all = sum(row["all"] for row in brand_rows)
 
-        # existing group sum (first EXISTING_GROUP_END brand cols)
-        existing_sum = sum(brand_rows[i]["all"] for i in range(min(EXISTING_GROUP_END, len(brand_rows))))
+        # 既存G合計：ブランド設定の「既存グループ合計＝○」のブランドのみ合算
+        existing_sum = sum(
+            brand_rows[i]["all"]
+            for i in range(len(brand_rows))
+            if i < len(existing_flags) and existing_flags[i]
+        )
 
         # IR広報用
         ir_sum = sum_pr + ORANGE_TWIST_COUNT
@@ -486,10 +499,12 @@ def build_all_monthly_data(df, target_brands, exclude_pr):
     return all_data
 
 
-def build_timeseries_html(all_data):
+def build_timeseries_html(all_data, brand_cols=None):
     """時系列推移テーブルHTMLを生成（法人グループ×ブランド×業態の3段階層ヘッダー付き）"""
     if not all_data:
         return "<p>データなし</p>"
+    if not brand_cols:
+        brand_cols = JIKEI_BRAND_COLS
 
     months = sorted(all_data.keys())
 
@@ -791,8 +806,12 @@ def generate():
 
     # ── 時系列データ構築 ──
     print("時系列推移データを集計中（2021/01〜現在）...")
-    all_monthly_data = build_all_monthly_data(df, [b for b,_ in brand_cols], exclude_pr)
-    timeseries_html = build_timeseries_html(all_monthly_data)
+    # ブランド設定シートの並び順・既存G合計フラグを時系列にも反映
+    all_monthly_data = build_all_monthly_data(
+        df, [b for b,_ in brand_cols], exclude_pr,
+        brand_cols=brand_cols, existing_flags=existing_flags
+    )
+    timeseries_html = build_timeseries_html(all_monthly_data, brand_cols=brand_cols)
 
     # JSON埋め込み用（シングルクォートをエスケープ）
     json_str = json.dumps(all_monthly_data, ensure_ascii=False).replace("'", "\\'")
