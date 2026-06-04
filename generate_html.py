@@ -822,6 +822,38 @@ def generate():
     # JSON埋め込み用（シングルクォートをエスケープ）
     json_str = json.dumps(all_monthly_data, ensure_ascii=False).replace("'", "\\'")
 
+    # クリニック一覧をJSON用に変換（全院）
+    clinic_records = []
+    for _, row in df.iterrows():
+        brand = get_brand(row)
+        if not brand or brand not in [b for b,_ in brand_cols]:
+            continue
+        def fmt_date(v):
+            ts = to_ts(v)
+            return ts.strftime("%Y-%m-%d") if ts else None
+
+        ma = to_ts(row.get("MA日"))
+        op = to_ts(row.get("開院日"))
+        base = ma if ma is not None else op
+
+        clinic_records.append({
+            "name": str(row.get("正式名称","") or ""),
+            "brand": brand,
+            "gyoutai": str(row.get("業態","") or ""),
+            "houjin": str(row.get("法人名","") or ""),
+            "region": get_region(row),
+            "open_date": fmt_date(base),
+            "conv_date": fmt_date(row.get("業態転換日")),
+            "close_date": fmt_date(row.get("閉院日")),
+        })
+    clinic_json = json.dumps(clinic_records, ensure_ascii=False)
+    clinic_json_escaped = clinic_json.replace("'", "\\'")
+
+    unique_brands = sorted(set(r["brand"] for r in clinic_records))
+    unique_houjin = sorted(set(r["houjin"] for r in clinic_records if r["houjin"]))
+    brands_json = json.dumps(unique_brands, ensure_ascii=False)
+    houjin_json = json.dumps(unique_houjin, ensure_ascii=False)
+
     # ── ブランド別棒グラフ ──
     plot_df = brand_df[brand_df["ブランド"].isin([f"{b}({g})" if g else b for b,g in brand_cols])].copy()
     fig2=px.bar(plot_df,x="全拠点",y="ブランド",orientation="h",height=550,color_discrete_sequence=[C_BLUE])
@@ -905,6 +937,7 @@ def generate():
   <div class="tab" onclick="showTab('trend',this)">📈 時系列推移</div>
   <div class="tab" onclick="showTab('history',this)">🏥 開院・閉院履歴</div>
   <div class="tab" onclick="showTab('convert',this)">🔵 業態転換履歴</div>
+  <div class="tab" onclick="showTab('snapshot',this)">📍 月次断面</div>
 </div>
 
 <div id="brand" class="content active">
@@ -965,11 +998,47 @@ def generate():
   {convert_html}
 </div>
 
+<div id="snapshot" class="content">
+  <div class="box">
+    <div class="section-title">月次断面 — 指定月末時点の在院一覧</div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px;padding:12px;background:#f8f9fa;border-radius:6px;border:1px solid #ddd">
+      <div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px">月末時点</div>
+        <select id="snapYear" style="padding:4px 8px;border:1px solid #ccc;border-radius:4px"></select>年
+        <select id="snapMonth" style="padding:4px 8px;border:1px solid #ccc;border-radius:4px"></select>月末
+      </div>
+      <div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px">ブランド</div>
+        <select id="snapBrand" style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;min-width:150px">
+          <option value="">（全て）</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px">国内／海外</div>
+        <select id="snapRegion" style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+          <option value="">（全て）</option>
+          <option value="国内">国内</option>
+          <option value="海外">海外</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px">法人名（部分一致）</div>
+        <input id="snapHoujin" type="text" placeholder="例：孝和会" style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;min-width:150px">
+      </div>
+      <button onclick="runSnapshot()" style="padding:6px 16px;background:#2980B9;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">検索</button>
+      <button onclick="downloadCSV()" style="padding:6px 16px;background:#27AE60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">📥 CSV ダウンロード</button>
+    </div>
+    <div id="snapshotResult"><p style="color:#999;font-size:13px">月末と条件を選択して「検索」を押してください。</p></div>
+  </div>
+</div>
+
 <div class="updated">最終更新: {today.strftime('%Y/%m/%d')}</div>
 
 <script>
 const ALL_DATA = JSON.parse('{json_str}');
 const BRAND_LABELS = {brand_labels_json};
+const CLINIC_DATA = JSON.parse('{clinic_json_escaped}');
+const UNIQUE_BRANDS = {brands_json};
 const LABEL_IR = {json.dumps(LABEL_IR, ensure_ascii=False)};
 const LABEL_ALL = {json.dumps(LABEL_ALL, ensure_ascii=False)};
 const ORANGE_TWIST_COUNT = {ORANGE_TWIST_COUNT};
@@ -1130,6 +1199,130 @@ function buildCompareTable(startKey, endKey) {{
 
   html += '</tbody></table>';
   container.innerHTML = html;
+}}
+
+// Populate brand dropdown
+(function initSnapshot() {{
+  const keys = Object.keys(ALL_DATA).sort();
+  const snapYearEl = document.getElementById('snapYear');
+  const snapMonthEl = document.getElementById('snapMonth');
+  const snapBrandEl = document.getElementById('snapBrand');
+
+  // Year/month options
+  const years = [...new Set(keys.map(k => k.split('/')[0]))];
+  years.forEach(y => snapYearEl.innerHTML += `<option value="${{y}}">${{y}}</option>`);
+  for (let m = 1; m <= 12; m++) {{
+    snapMonthEl.innerHTML += `<option value="${{String(m).padStart(2,'0')}}">${{m}}月</option>`;
+  }}
+  // Default to latest month
+  if (keys.length) {{
+    const [ey, em] = keys[keys.length-1].split('/');
+    snapYearEl.value = ey;
+    snapMonthEl.value = em;
+  }}
+  // Brand options
+  UNIQUE_BRANDS.forEach(b => snapBrandEl.innerHTML += `<option value="${{b}}">${{b}}</option>`);
+}})();
+
+function checkActiveJS(clinic, targetDateStr) {{
+  if (!clinic.open_date) return false;
+  const base = new Date(clinic.open_date);
+  const target = new Date(targetDateStr + 'T23:59:59');
+  if (base > target) return false;
+  const finalEnd = clinic.conv_date || clinic.close_date;
+  if (finalEnd) {{
+    const endDate = new Date(finalEnd);
+    if (endDate <= target) return false;
+  }}
+  return true;
+}}
+
+let lastSnapshotData = [];
+
+function runSnapshot() {{
+  const year = document.getElementById('snapYear').value;
+  const month = document.getElementById('snapMonth').value;
+  const brand = document.getElementById('snapBrand').value;
+  const region = document.getElementById('snapRegion').value;
+  const houjin = document.getElementById('snapHoujin').value.trim();
+
+  // Last day of selected month
+  const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+  const targetDate = `${{year}}-${{month}}-${{String(lastDay).padStart(2,'0')}}`;
+
+  // Filter clinics
+  const filtered = CLINIC_DATA.filter(c => {{
+    if (!checkActiveJS(c, targetDate)) return false;
+    if (brand && c.brand !== brand) return false;
+    if (region && c.region !== region) return false;
+    if (houjin && !c.houjin.includes(houjin)) return false;
+    return true;
+  }});
+
+  lastSnapshotData = filtered;
+
+  const container = document.getElementById('snapshotResult');
+  if (!filtered.length) {{
+    container.innerHTML = '<p style="color:#c0392b;font-size:13px">該当する院がありません。</p>';
+    return;
+  }}
+
+  // Group by brand
+  const grouped = {{}};
+  filtered.forEach(c => {{
+    if (!grouped[c.brand]) grouped[c.brand] = [];
+    grouped[c.brand].push(c);
+  }});
+
+  let html = `<p style="font-size:13px;color:#666;margin-bottom:8px"><b>${{year}}年${{parseInt(month)}}月末時点：${{filtered.length}}院</b></p>`;
+
+  Object.entries(grouped).sort((a,b) => a[0].localeCompare(b[0], 'ja')).forEach(([brand, clinics], idx) => {{
+    const uid = 'snap' + idx;
+    html += `<div style="margin-bottom:6px;border:1px solid #ddd;border-radius:6px;overflow:hidden">`;
+    html += `<div onclick="toggleAcc('${{uid}}a','${{uid}}r')" style="padding:8px 14px;cursor:pointer;background:#f8f9fa;display:flex;justify-content:space-between;align-items:center">`;
+    html += `<span><span id="${{uid}}r" style="font-size:11px">▶</span> <b>${{brand}}</b>（${{clinics.length}}院）</span></div>`;
+    html += `<div id="${{uid}}a" style="display:none;overflow-x:auto">`;
+    html += `<table style="border-collapse:collapse;width:100%;font-size:13px">`;
+    html += `<thead><tr style="background:#2C3E50;color:white">`;
+    html += `<th style="padding:6px 10px;border:1px solid #555">院名</th>`;
+    html += `<th style="padding:6px 10px;border:1px solid #555">業態</th>`;
+    html += `<th style="padding:6px 10px;border:1px solid #555">法人名</th>`;
+    html += `<th style="padding:6px 10px;border:1px solid #555">国内／海外</th>`;
+    html += `<th style="padding:6px 10px;border:1px solid #555">開院日</th>`;
+    html += `</tr></thead><tbody>`;
+    clinics.forEach((c, ci) => {{
+      const bg = ci % 2 === 0 ? 'white' : '#f8f9fa';
+      html += `<tr style="background:${{bg}}">`;
+      html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.name}}</td>`;
+      html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.gyoutai}}</td>`;
+      html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.houjin}}</td>`;
+      html += `<td style="padding:5px 10px;border:1px solid #ddd;text-align:center">${{c.region}}</td>`;
+      html += `<td style="padding:5px 10px;border:1px solid #ddd">${{c.open_date || ''}}</td>`;
+      html += `</tr>`;
+    }});
+    html += `</tbody></table></div></div>`;
+  }});
+
+  container.innerHTML = html;
+}}
+
+function downloadCSV() {{
+  if (!lastSnapshotData.length) {{
+    alert('先に「検索」を実行してください。');
+    return;
+  }}
+  const year = document.getElementById('snapYear').value;
+  const month = document.getElementById('snapMonth').value;
+  const headers = ['院名','ブランド','業態','法人名','国内／海外','開院日'];
+  const rows = lastSnapshotData.map(c => [
+    c.name, c.brand, c.gyoutai, c.houjin, c.region, c.open_date || ''
+  ]);
+  const csvContent = [headers, ...rows].map(r => r.map(v => `"${{String(v).replace(/"/g,'""')}}"`).join(',')).join('\\n');
+  const blob = new Blob(['\\uFEFF' + csvContent], {{type:'text/csv;charset=utf-8;'}});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `月次断面_${{year}}${{month}}.csv`;
+  a.click();
 }}
 </script>
 </body>
