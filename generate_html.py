@@ -70,6 +70,19 @@ EXISTING_GROUP_END = 19
 LABEL_IR = "IR・広報用（除：Holdingsへの収益貢献なし、含：OrangeTwist）"
 LABEL_ALL = "全拠点"
 
+REGION_HOUJIN_ORDER = {
+    "国内": [
+        "医療法人 湘美会","医療法人社団 孝和会","医療法人社団 菜寿会","医療法人社団 愛恵会",
+        "医療法人社団 樹慶会","医療法人社団 リッツ美容外科","一般社団法人MASA","健美会","法人無し（個人開設）",
+        "医療法人社団 風林会","医療法人 きびたき会","医療法人社団 百花会",
+        "医療法人社団十二会","医療法人社団美咲会","一般社団法人美央斗会",
+        "㈻SBC東京医療大学附属","株式会社SBC湘南接骨院","株式会社ボディアーキ・ジャパン"
+    ],
+    "海外": [
+        "Shoubikai Medical Vietnam Co., Ltd.","WWMG","DS","DSS","DSS(FC)","WWFC","RCC"
+    ]
+}
+
 
 def get_path():
     if BOX_PATH.exists(): return BOX_PATH
@@ -467,44 +480,68 @@ def build_all_monthly_data(df, target_brands, exclude_pr):
 
 
 def build_timeseries_html(all_data):
-    """時系列推移テーブルHTMLを生成"""
+    """時系列推移テーブルHTMLを生成（法人グループ×ブランドの階層ヘッダー付き）"""
     if not all_data:
         return "<p>データなし</p>"
 
     brand_labels = [f"{b}({g})" if g else b for b, g in JIKEI_BRAND_COLS]
-    houjin_labels = [gname for gname, _ in HOUJIN_GROUPS]
 
-    n_brand = len(brand_labels)
-    n_houjin = len(houjin_labels)
+    # 第1パス: 各法人グループで出現するブランドを収集
+    # jikei_row には "{gname}|{blabel}" 形式のキーが入っている
+    group_brands = {}  # gname -> ordered list of blabels that appear
+    for gname, _ in HOUJIN_GROUPS:
+        seen = set()
+        ordered = []
+        for ym, rec in all_data.items():
+            jr = rec.get("jikei_row", {})
+            for k, v in jr.items():
+                if k.startswith(f"{gname}|") and v and v > 0:
+                    blabel = k[len(gname)+1:]
+                    if blabel not in seen:
+                        seen.add(blabel)
+                        ordered.append(blabel)
+        # JIKEIの順序で並べ直す
+        jikei_order = [f"{b}({g})" if g else b for b, g in JIKEI_BRAND_COLS]
+        sorted_blabels = [bl for bl in jikei_order if bl in seen]
+        # 未定義のものは末尾
+        for bl in ordered:
+            if bl not in sorted_blabels:
+                sorted_blabels.append(bl)
+        group_brands[gname] = sorted_blabels
 
     # スタイル定義
-    def th(extra="", colspan=1, rowspan=1, bg=C_HEADER):
+    def th_attr(colspan=1, rowspan=1, bg=C_HEADER):
         s = f'padding:6px 8px;background:{bg};color:white;border:1px solid #444;white-space:nowrap;font-size:11px;position:sticky;top:0;z-index:2'
         attrs = f'style="{s}"'
         if colspan > 1: attrs += f' colspan="{colspan}"'
         if rowspan > 1: attrs += f' rowspan="{rowspan}"'
         return attrs
 
-    def th_sticky(rowspan=2):
+    def th_sticky_attr(rowspan=2):
         s = f'padding:6px 8px;background:{C_HEADER};color:white;border:1px solid #444;white-space:nowrap;font-size:11px;position:sticky;top:0;left:0;z-index:3'
         return f'style="{s}" rowspan="{rowspan}"'
 
-    # 第1行ヘッダー
-    row1 = f'<th {th_sticky()}>年月</th>'
-    row1 += f'<th {th(colspan=n_brand)}>ブランド別</th>'
-    row1 += f'<th {th(rowspan=2, bg="#1E8449")}>既存G合計</th>'
-    row1 += f'<th {th(rowspan=2, bg=C_ORANGE)}>OrangeTwist</th>'
-    row1 += f'<th {th(rowspan=2, bg=C_ORANGE)}>{LABEL_IR}</th>'
-    row1 += f'<th {th(rowspan=2)}>{LABEL_ALL}</th>'
+    # 第1行ヘッダー: 年月 | ブランド別(colspan=n_brand) | 既存G合計 | OrangeTwist | LABEL_IR | LABEL_ALL | 各法人グループ(colspan=サブブランド数+1)
+    n_brand = len(brand_labels)
+    row1 = f'<th {th_sticky_attr()}>年月</th>'
+    row1 += f'<th {th_attr(colspan=n_brand)}>ブランド別</th>'
+    row1 += f'<th {th_attr(rowspan=2, bg="#1E8449")}>既存G合計</th>'
+    row1 += f'<th {th_attr(rowspan=2, bg=C_ORANGE)}>OrangeTwist</th>'
+    row1 += f'<th {th_attr(rowspan=2, bg=C_ORANGE)}>{LABEL_IR}</th>'
+    row1 += f'<th {th_attr(rowspan=2)}>{LABEL_ALL}</th>'
     for gname, _ in HOUJIN_GROUPS:
-        row1 += f'<th {th(bg=C_BLUE)}>{gname}</th>'
+        sub_count = len(group_brands[gname])
+        colspan = sub_count + 1  # サブブランド列 + 合計列
+        row1 += f'<th {th_attr(colspan=colspan, bg=C_BLUE)}>{gname}</th>'
 
-    # 第2行ヘッダー
+    # 第2行ヘッダー: ブランド名 | 各法人グループのサブブランド + 合計
     row2 = ""
     for label in brand_labels:
-        row2 += f'<th {th()}>{label}</th>'
-    for _ in HOUJIN_GROUPS:
-        row2 += f'<th {th(bg=C_BLUE)}>合計</th>'
+        row2 += f'<th {th_attr()}>{label}</th>'
+    for gname, _ in HOUJIN_GROUPS:
+        for blabel in group_brands[gname]:
+            row2 += f'<th {th_attr(bg=C_BLUE)}>{blabel}</th>'
+        row2 += f'<th {th_attr(bg=C_BLUE)}>合計</th>'
 
     thead = f"<thead><tr>{row1}</tr><tr>{row2}</tr></thead>"
 
@@ -533,13 +570,16 @@ def build_timeseries_html(all_data):
         cells += f'<td style="{td_base}">{jr.get(LABEL_ALL, 0)}</td>'
 
         for gname, _ in HOUJIN_GROUPS:
+            for blabel in group_brands[gname]:
+                key = f"{gname}|{blabel}"
+                cells += f'<td style="{td_base}">{jr.get(key, 0)}</td>'
             cells += f'<td style="{td_base}">{jr.get(gname, 0)}</td>'
 
         tbody_rows += f'<tr>{cells}</tr>'
 
     tbody = f"<tbody>{tbody_rows}</tbody>"
     table = f'<table style="border-collapse:collapse;font-size:12px;min-width:100%">{thead}{tbody}</table>'
-    return f'<div style="overflow-x:auto;max-height:75vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px">{table}</div>'
+    return f'<div style="overflow-x:auto;max-height:70vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px">{table}</div>'
 
 
 def generate():
@@ -567,12 +607,12 @@ def generate():
         else: keys=[k for k in r1 if k.startswith(f"{brand}|")]
         cnt_all=sum(r1[k]["all"] for k in keys); cnt_pr=sum(r1[k]["pr"] for k in keys)
         label = f"{brand}({gyoutai})" if gyoutai else brand
-        brand_rows_disp.append({"ブランド":label,"広報・IR用":cnt_pr,"全拠点(ALL)":cnt_all})
+        brand_rows_disp.append({"ブランド":label,"広報・IR用":cnt_pr,"全拠点":cnt_all})
     brand_df = pd.DataFrame(brand_rows_disp)
     total_row = pd.DataFrame([
-        {"ブランド":"集計内訳合計","広報・IR用":sum_pr,"全拠点(ALL)":sum_all},
-        {"ブランド":"海外(OrangeTwist)加算","広報・IR用":ORANGE_TWIST_COUNT,"全拠点(ALL)":"－"},
-        {"ブランド":"最終報告数値","広報・IR用":sum_pr+ORANGE_TWIST_COUNT,"全拠点(ALL)":sum_all},
+        {"ブランド":"集計内訳合計","広報・IR用":sum_pr,"全拠点":sum_all},
+        {"ブランド":"海外(OrangeTwist)加算","広報・IR用":ORANGE_TWIST_COUNT,"全拠点":"－"},
+        {"ブランド":"最終報告数値","広報・IR用":sum_pr+ORANGE_TWIST_COUNT,"全拠点":sum_all},
     ])
     brand_df = pd.concat([brand_df, total_row], ignore_index=True)
 
@@ -585,20 +625,23 @@ def generate():
             is_second_last = i == n - 2
             is_third_last = i == n - 3
             pr_val = row.get("広報・IR用", "")
-            all_val = row.get("全拠点(ALL)", "")
+            all_val = row.get("全拠点", "")
             highlight = (str(pr_val) != str(all_val) and str(all_val) != "－" and i < n - 3)
             if i >= n - 3:
                 if is_last:
+                    # 最終報告数値 → オレンジ
                     row_bg = C_ORANGE
                     row_color = "white"
                     row_fw = "bold"
                 elif is_second_last:
-                    row_bg = C_ORANGE
-                    row_color = "white"
+                    # 海外(OrangeTwist)加算 → 黄色
+                    row_bg = "#FFF9C4"
+                    row_color = "#333"
                     row_fw = "normal"
                 else:
-                    row_bg = C_TOTAL
-                    row_color = "#333"
+                    # 集計内訳合計 → オレンジ
+                    row_bg = C_ORANGE
+                    row_color = "white"
                     row_fw = "bold"
             elif highlight:
                 row_bg = "#FFFDE7"
@@ -619,18 +662,113 @@ def generate():
     brand_table = brand_table_html(brand_df)
 
     # ── 国内/海外×法人表 ──
-    dom, ovs = [], []
-    for region in ["国内","海外"]:
-        for k in sorted([k for k in r2 if k.startswith(region+"|")]):
-            p=k.split("|",1); e={"法人名":p[1],"広報・IR用":r2[k]["pr"],"全拠点(ALL)":r2[k]["all"]}
-            (dom if region=="国内" else ovs).append(e)
-    dom_df=pd.DataFrame(dom); ovs_df=pd.DataFrame(ovs)
+    # r2 から 国内/海外 それぞれのデータを取得
+    raw_dom, raw_ovs = {}, {}
+    for k, v in r2.items():
+        if k.startswith("国内|"):
+            houjin_name = k.split("|", 1)[1]
+            raw_dom[houjin_name] = {"pr": v["pr"], "all": v["all"]}
+        elif k.startswith("海外|"):
+            houjin_name = k.split("|", 1)[1]
+            raw_ovs[houjin_name] = {"pr": v["pr"], "all": v["all"]}
+
+    def build_region_table_html(raw_dom_data, raw_ovs_data):
+        """国内/海外×法人の統合テーブルHTMLを生成"""
+        C_YELLOW = "#FFF9C4"
+        C_LIGHT_YELLOW = "#FFFDE7"
+        td_style = 'padding:6px 10px;border:1px solid #ddd'
+        th_style = f'padding:8px 10px;background:{C_HEADER};color:white;border:1px solid #555'
+
+        rows_html = ""
+
+        def make_row(cells_data, bg, color="inherit", fw="normal"):
+            cells = ""
+            for ci, val in enumerate(cells_data):
+                align = "right" if ci > 0 else "left"
+                cells += f'<td style="{td_style};text-align:{align};background:{bg};color:{color};font-weight:{fw}">{val}</td>'
+            return f"<tr>{cells}</tr>"
+
+        # 国内行
+        dom_order = REGION_HOUJIN_ORDER["国内"]
+        dom_seen = set()
+        dom_rows_ordered = []
+        for h in dom_order:
+            if h in raw_dom_data:
+                dom_rows_ordered.append(h)
+                dom_seen.add(h)
+        # 未定義の法人を末尾に追加
+        for h in sorted(raw_dom_data.keys()):
+            if h not in dom_seen:
+                dom_rows_ordered.append(h)
+
+        dom_sum_pr = 0
+        dom_sum_all = 0
+        for h in dom_rows_ordered:
+            v = raw_dom_data[h]
+            pr_val = v["pr"]; all_val = v["all"]
+            dom_sum_pr += pr_val; dom_sum_all += all_val
+            highlight = str(pr_val) != str(all_val)
+            bg = C_LIGHT_YELLOW if highlight else "white"
+            rows_html += make_row([h, pr_val, all_val], bg)
+
+        # 国内 小計
+        rows_html += make_row(["国内 小計", dom_sum_pr, dom_sum_all], C_ORANGE, "white", "bold")
+
+        # 海外行
+        ovs_order = REGION_HOUJIN_ORDER["海外"]
+        ovs_seen = set()
+        ovs_rows_ordered = []
+        for h in ovs_order:
+            if h in raw_ovs_data:
+                ovs_rows_ordered.append(h)
+                ovs_seen.add(h)
+        for h in sorted(raw_ovs_data.keys()):
+            if h not in ovs_seen:
+                ovs_rows_ordered.append(h)
+
+        ovs_sum_pr = 0
+        ovs_sum_all = 0
+        # OrangeTwist判定：海外法人のうちOrangeTwist系を除いた合計のため、ここでは全海外を合計
+        for h in ovs_rows_ordered:
+            v = raw_ovs_data[h]
+            pr_val = v["pr"]; all_val = v["all"]
+            ovs_sum_pr += pr_val; ovs_sum_all += all_val
+            highlight = str(pr_val) != str(all_val)
+            bg = C_LIGHT_YELLOW if highlight else "white"
+            rows_html += make_row([h, pr_val, all_val], bg)
+
+        # 海外 小計
+        rows_html += make_row(["海外 小計", ovs_sum_pr, ovs_sum_all], C_ORANGE, "white", "bold")
+
+        # 合計（OrangeTwist除く）= 全拠点合計（OrangeTwistはsum_prに含まれていないため広報用合計を使用）
+        total_pr = dom_sum_pr + ovs_sum_pr
+        total_all = dom_sum_all + ovs_sum_all
+        rows_html += make_row(["合計（OrangeTwist除く）", total_pr, total_all], C_ORANGE, "white", "bold")
+
+        # OrangeTwist加算
+        rows_html += make_row(["OrangeTwist加算", ORANGE_TWIST_COUNT, "－"], C_YELLOW, "#333", "normal")
+
+        # 最終報告数値
+        rows_html += make_row(["最終報告数値", total_pr + ORANGE_TWIST_COUNT, total_all], C_ORANGE, "white", "bold")
+
+        headers = "".join(f'<th style="{th_style};text-align:left">{c}</th>' for c in ["法人名", "広報・IR用", "全拠点"])
+        return f'<table style="border-collapse:collapse;width:100%;font-size:14px"><thead><tr>{headers}</tr></thead><tbody>{rows_html}</tbody></table>'
+
+    region_table_html_str = build_region_table_html(raw_dom, raw_ovs)
+
+    # 後方互換のためdom_df/ovs_dfも保持（使用箇所は後でregion_table_html_strに差し替え）
+    dom_tmp, ovs_tmp = [], []
+    for k in sorted([k for k in r2 if k.startswith("国内|")]):
+        p=k.split("|",1); dom_tmp.append({"法人名":p[1],"広報・IR用":r2[k]["pr"],"全拠点":r2[k]["all"]})
+    for k in sorted([k for k in r2 if k.startswith("海外|")]):
+        p=k.split("|",1); ovs_tmp.append({"法人名":p[1],"広報・IR用":r2[k]["pr"],"全拠点":r2[k]["all"]})
+    dom_df=pd.DataFrame(dom_tmp); ovs_df=pd.DataFrame(ovs_tmp)
 
     # ── 法人別表 ──
     houjin_rows=[]; total_h=0
     for h in HOUJIN_ORDER:
-        cnt=r3.get(h,{}).get("all",0); houjin_rows.append({"法人名":h,"全拠点(ALL)":cnt}); total_h+=cnt
-    houjin_rows.append({"法人名":"合計","全拠点(ALL)":total_h})
+        cnt=r3.get(h,{}).get("all",0); houjin_rows.append({"法人名":h,"全拠点":cnt}); total_h+=cnt
+    houjin_rows.append({"法人名":"合計","全拠点":total_h})
     houjin_df=pd.DataFrame(houjin_rows)
 
     # ── 時系列データ構築 ──
@@ -643,7 +781,7 @@ def generate():
 
     # ── ブランド別棒グラフ ──
     plot_df = brand_df[brand_df["ブランド"].isin([f"{b}({g})" if g else b for b,g in brand_cols])].copy()
-    fig2=px.bar(plot_df,x="全拠点(ALL)",y="ブランド",orientation="h",height=550,color_discrete_sequence=[C_BLUE])
+    fig2=px.bar(plot_df,x="全拠点",y="ブランド",orientation="h",height=550,color_discrete_sequence=[C_BLUE])
     fig2.update_layout(yaxis=dict(autorange="reversed"),margin=dict(t=30))
     chart2_html = fig2.to_html(full_html=False, include_plotlyjs="cdn")
 
@@ -704,11 +842,11 @@ def generate():
 
 <div class="kpi">
   <div class="kpi-card orange">
-    <div class="kpi-label">IR・広報用（OrangeTwist含む）</div>
+    <div class="kpi-label">IR・広報用（除：Holdingsへの収益貢献なし、含：OrangeTwist）</div>
     <div class="kpi-value">{sum_pr+ORANGE_TWIST_COUNT:,} 院</div>
   </div>
   <div class="kpi-card">
-    <div class="kpi-label">全拠点(ALL)</div>
+    <div class="kpi-label">全拠点</div>
     <div class="kpi-value">{sum_all:,} 院</div>
   </div>
   <div class="kpi-card">
@@ -751,15 +889,9 @@ def generate():
 </div>
 
 <div id="region" class="content">
-  <div class="grid-2">
-    <div class="box">
-      <div class="section-title">国内</div>
-      {df_to_html_table(dom_df) if not dom_df.empty else '<p>データなし</p>'}
-    </div>
-    <div class="box">
-      <div class="section-title">海外</div>
-      {df_to_html_table(ovs_df) if not ovs_df.empty else '<p>データなし</p>'}
-    </div>
+  <div class="box">
+    <div class="section-title" id="regionTableTitle">{report_date} 国内／海外×法人</div>
+    {region_table_html_str}
   </div>
 </div>
 
@@ -945,7 +1077,7 @@ function buildCompareTable(startKey, endKey) {{
   const dIR = eIR - sIR;
   const dIRStr = dIR >= 0 ? '+' + dIR : String(dIR);
   html += '<tr style="background:#FAD7A0;font-weight:bold">';
-  html += '<td>IR・広報用（OrangeTwist含む）</td>';
+  html += '<td>IR・広報用（除：Holdingsへの収益貢献なし、含：OrangeTwist）</td>';
   html += '<td style="text-align:right">' + sIR + '</td>';
   html += '<td style="text-align:right">' + eIR + '</td>';
   html += '<td style="text-align:right;' + (dIR>=0?'color:#27ae60':'color:#c0392b') + '">' + dIRStr + '</td>';
