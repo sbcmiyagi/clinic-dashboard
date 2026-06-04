@@ -117,6 +117,199 @@ def load_houjin_settings():
 # 法人設定はgenerate()内で動的読み込みするためここでは初期化のみ
 REGION_HOUJIN_ORDER = {"国内": [], "海外": []}
 
+DOCTOR_FILE_PATH = Path(r"C:\Users\宮城杏奈\Box\総合企画部_特殊案件\その他\院情報一覧カウント\ドクター人事通達 自動集計.xlsx")
+
+
+def load_doctor_data():
+    """ドクター人事通達ファイルを読み込む"""
+    try:
+        if not DOCTOR_FILE_PATH.exists():
+            return pd.DataFrame()
+        df = pd.read_excel(DOCTOR_FILE_PATH, sheet_name="全体", header=1)
+        df["付日"] = pd.to_datetime(df["付日"], errors="coerce")
+        df = df.dropna(subset=["付日"])
+        df = df.sort_values("付日").reset_index(drop=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+def extract_doctor_name(raw_name):
+    """氏名（よみ）列から漢字名を抽出（読み仮名を除く）"""
+    if pd.isna(raw_name): return ""
+    s = str(raw_name).strip()
+    # Remove content in parentheses (reading)
+    import re
+    s = re.sub(r'[（(][^）)]*[）)]', '', s).strip()
+    return s
+
+def parse_director_from_detail(detail):
+    """
+    異動後/詳細から院長情報を抽出
+    Returns (clinic_name, True) if 院長 found, else (None, False)
+    """
+    if pd.isna(detail): return None, False
+    s = str(detail)
+    # Split by 兼 to handle multiple roles
+    parts = s.split("兼")
+    for part in parts:
+        part = part.strip()
+        if "・" in part:
+            idx = part.index("・")
+            clinic = part[:idx].strip()
+            role = part[idx+1:].strip()
+            if "院長" in role and "副院長" not in role:
+                return clinic, True
+    return None, False
+
+def build_director_pivot(doctor_df, clinic_df):
+    """
+    院長履歴のピボットテーブルを構築
+    Returns: dict {clinic_name: {month_key: doctor_name}}
+    """
+    if doctor_df.empty:
+        return {}, []
+
+    # Get all months from 2025/09 to today
+    today = date.today()
+    months = []
+    y, m = 2025, 9
+    while (y, m) <= (today.year, today.month):
+        months.append(f"{y}/{m:02d}")
+        m += 1
+        if m > 12: m = 1; y += 1
+
+    # Build monthly events index
+    events_by_month = {}
+    for _, row in doctor_df.iterrows():
+        date_val = row["付日"]
+        if pd.isna(date_val): continue
+        month_key = f"{date_val.year}/{date_val.month:02d}"
+        if month_key not in events_by_month:
+            events_by_month[month_key] = []
+        events_by_month[month_key].append(row)
+
+    # Build cumulative state for each month
+    monthly_director_states = {}
+    state = {}  # {clinic: doctor_name}
+    doctor_clinic = {}  # {doctor: clinic}
+
+    for month_key in months:
+        # Process events for this month
+        if month_key in events_by_month:
+            for row in events_by_month[month_key]:
+                kubun = str(row.get("区分", "") or "").strip()
+                detail = str(row.get("異動後/詳細", "") or "")
+                doctor = extract_doctor_name(row.get("氏名（よみ）", ""))
+
+                clinic, is_dir = parse_director_from_detail(detail)
+
+                if kubun == "退職":
+                    # Remove from current director position
+                    if doctor in doctor_clinic:
+                        old_clinic = doctor_clinic.pop(doctor)
+                        if state.get(old_clinic) == doctor:
+                            state[old_clinic] = ""
+                elif is_dir and clinic:
+                    # Remove from old position if any
+                    if doctor in doctor_clinic:
+                        old_clinic = doctor_clinic[doctor]
+                        if state.get(old_clinic) == doctor:
+                            state[old_clinic] = ""
+                    # Also remove previous director of this clinic from their tracking
+                    prev_director = state.get(clinic, "")
+                    if prev_director and prev_director != doctor:
+                        if doctor_clinic.get(prev_director) == clinic:
+                            del doctor_clinic[prev_director]
+                    state[clinic] = doctor
+                    doctor_clinic[doctor] = clinic
+                elif kubun in ("異動", "昇格") and not is_dir:
+                    # Moving to non-director role - remove from director position
+                    if doctor in doctor_clinic:
+                        old_clinic = doctor_clinic.pop(doctor)
+                        if state.get(old_clinic) == doctor:
+                            state[old_clinic] = ""
+
+        # Save snapshot for this month (deep copy)
+        monthly_director_states[month_key] = dict(state)
+
+    return monthly_director_states, months
+
+def build_director_html(doctor_df, clinic_df, brand_cols):
+    """院長履歴ピボットテーブルHTMLを生成"""
+    if doctor_df.empty:
+        return '<p style="color:#999;font-size:13px">ドクター人事通達ファイルが見つかりません。<br>BOXに「ドクター人事通達 自動集計.xlsx」を保存してください。</p>'
+
+    monthly_states, months = build_director_pivot(doctor_df, clinic_df)
+    if not months:
+        return '<p style="color:#999">データがありません</p>'
+
+    # Get active clinics (use クリニック一覧)
+    target_brands = [b for b, _ in brand_cols]
+    active_clinics = []
+    seen = set()
+    for _, row in clinic_df.iterrows():
+        brand = get_brand(row)
+        if brand not in target_brands: continue
+        # Only include clinics that appear in director data
+        name = str(row.get("正式名称","") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            active_clinics.append(name)
+
+    # Find clinics that actually have director data
+    clinics_with_data = set()
+    for m_state in monthly_states.values():
+        for clinic, doctor in m_state.items():
+            if doctor:
+                clinics_with_data.add(clinic)
+
+    if not clinics_with_data:
+        return '<p style="color:#999">院長データが見つかりません。ファイルの内容を確認してください。</p>'
+
+    # Build HTML table
+    # Header
+    th_style = f'padding:6px 10px;border:1px solid #555;background:{C_HEADER};color:white;white-space:nowrap;font-size:12px'
+
+    headers = f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:180px">院名</th>'
+    for mk in months:
+        headers += f'<th style="{th_style};min-width:80px">{mk}</th>'
+
+    # Rows
+    rows_html = ""
+    for clinic in sorted(clinics_with_data):
+        prev_doctor = ""
+        cells = f'<td style="padding:5px 10px;border:1px solid #ddd;position:sticky;left:0;background:white;font-size:12px;white-space:nowrap;z-index:1">{clinic}</td>'
+        for mk in months:
+            doctor = monthly_states.get(mk, {}).get(clinic, "")
+            changed = doctor and doctor != prev_doctor and prev_doctor != ""
+            if not doctor:
+                bg = "#f8f9fa"; color = "#ccc"; txt = "―"
+            elif changed:
+                bg = "#FFF9C4"; color = "#333"; txt = doctor  # yellow = changed
+            else:
+                bg = "white"; color = "#333"; txt = doctor
+            cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:{bg};color:{color};font-size:12px;white-space:nowrap;text-align:center">{txt}</td>'
+            if doctor: prev_doctor = doctor
+        rows_html += f"<tr>{cells}</tr>"
+
+    legend = '''<div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;align-items:center">
+      <span>凡例：</span>
+      <span style="background:#FFF9C4;padding:2px 8px;border:1px solid #ddd">院長交代</span>
+      <span style="background:white;padding:2px 8px;border:1px solid #ddd">継続</span>
+      <span style="color:#ccc;padding:2px 8px;border:1px solid #ddd">―　記録なし</span>
+    </div>'''
+
+    table = f'''
+    {legend}
+    <div style="overflow-x:auto;overflow-y:auto;max-height:70vh">
+    <table style="border-collapse:collapse;font-size:12px">
+    <thead><tr>{headers}</tr></thead>
+    <tbody>{rows_html}</tbody>
+    </table>
+    </div>'''
+
+    return table
+
 
 def get_path():
     if BOX_PATH.exists(): return BOX_PATH
@@ -942,6 +1135,10 @@ def generate():
     fig2.update_layout(yaxis=dict(autorange="reversed"),margin=dict(t=30))
     chart2_html = fig2.to_html(full_html=False, include_plotlyjs="cdn")
 
+    # ── 院長履歴 ──
+    doctor_df = load_doctor_data()
+    director_html = build_director_html(doctor_df, df, brand_cols)
+
     # ── 開院・閉院・業態転換履歴 ──
     print("開院・閉院・業態転換履歴を集計中...")
     history, hist_years = build_history(df, [b for b,_ in brand_cols], exclude_pr)
@@ -988,6 +1185,7 @@ def generate():
   .tab-history{{background:#E74C3C}}
   .tab-convert{{background:#16A085}}
   .tab-snapshot{{background:#2C3E50}}
+  .tab-director{{background:#1A5276}}
   .content{{display:none;padding:24px 30px}}
   .content.active{{display:block}}
   .section-title{{background:{C_GREEN};padding:8px 14px;font-weight:bold;border-radius:4px;margin-bottom:12px}}
@@ -1025,6 +1223,7 @@ def generate():
   <div class="tab tab-history" onclick="showTab('history',this)">🏥 開院・閉院履歴</div>
   <div class="tab tab-convert" onclick="showTab('convert',this)">🔵 業態転換履歴</div>
   <div class="tab tab-snapshot" onclick="showTab('snapshot',this)">🏥 在院一覧（月末時点）</div>
+  <div class="tab tab-director" onclick="showTab('director',this)">👨‍⚕️ 院長履歴</div>
 </div>
 
 <div id="brand" class="content active">
@@ -1127,6 +1326,14 @@ def generate():
       </button>
     </div>
     <div id="snapshotResult"><p style="color:#999;font-size:13px">月末と条件を選択して「検索」を押してください。</p></div>
+  </div>
+</div>
+
+<div id="director" class="content">
+  <div class="box">
+    <div class="section-title">院長履歴（月末時点）</div>
+    <p style="font-size:12px;color:#666;margin-bottom:8px">※2025年9月以降のデータを表示。黄色セルは院長交代。</p>
+    {director_html}
   </div>
 </div>
 
