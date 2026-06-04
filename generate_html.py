@@ -71,18 +71,45 @@ EXISTING_GROUP_END = 19
 LABEL_IR = "IR・広報用（除：Holdingsへの収益貢献なし、含：OrangeTwist）"
 LABEL_ALL = "全拠点"
 
-REGION_HOUJIN_ORDER = {
-    "国内": [
-        "医療法人 湘美会","医療法人社団 孝和会","医療法人社団 菜寿会","医療法人社団 愛恵会",
-        "医療法人社団 樹慶会","医療法人社団 リッツ美容外科","一般社団法人MASA","健美会","法人無し（個人開設）",
-        "医療法人社団 風林会","医療法人 きびたき会","医療法人社団 百花会",
-        "医療法人社団十二会","医療法人社団美咲会","一般社団法人美央斗会",
-        "㈻SBC東京医療大学附属","株式会社SBC湘南接骨院","株式会社ボディアーキ・ジャパン"
-    ],
-    "海外": [
-        "Shoubikai Medical Vietnam Co., Ltd.","WWMG","DS","DSS","DSS(FC)","WWFC","RCC"
-    ]
-}
+def load_houjin_settings():
+    """Excelの「法人設定」シートから法人の並び順を読み込む。シートがない場合はデフォルト値を返す。"""
+    default = {
+        "国内": [
+            "医療法人 湘美会","医療法人社団 孝和会","医療法人社団 菜寿会","医療法人社団 愛恵会",
+            "医療法人社団 樹慶会","医療法人社団 リッツ美容外科","一般社団法人MASA","健美会","法人無し（個人開設）",
+            "医療法人社団 風林会","医療法人 きびたき会","医療法人社団 百花会",
+            "医療法人社団十二会","医療法人社団美咲会","一般社団法人美央斗会",
+            "㈻SBC東京医療大学附属","株式会社SBC湘南接骨院","株式会社ボディアーキ・ジャパン"
+        ],
+        "海外": ["Shoubikai Medical Vietnam Co., Ltd.","WWMG","DS","DSS","DSS(FC)","WWFC","RCC"]
+    }
+    try:
+        path = get_path()
+        raw = pd.read_excel(path, sheet_name="法人設定", header=None)
+        # ヘッダー行を自動検出
+        header_row = None
+        for i, row in raw.iterrows():
+            if any("法人名" in str(v) for v in row.values):
+                header_row = i; break
+        if header_row is None:
+            return default
+        df = pd.read_excel(path, sheet_name="法人設定", header=header_row)
+        df = df.dropna(subset=["法人名"])
+        df["法人名"] = df["法人名"].astype(str).str.strip()
+        if "表示順" in df.columns:
+            df = df.sort_values("表示順")
+        result = {"国内": [], "海外": []}
+        for _, row in df.iterrows():
+            name   = str(row.get("法人名","") or "").strip()
+            region = str(row.get("国内／海外","") or "").strip()
+            if name and region in result:
+                result[region].append(name)
+        return result if (result["国内"] or result["海外"]) else default
+    except Exception:
+        return default
+
+# 法人設定はgenerate()内で動的読み込みするためここでは初期化のみ
+REGION_HOUJIN_ORDER = {"国内": [], "海外": []}
 
 
 def get_path():
@@ -626,8 +653,11 @@ def build_timeseries_html(all_data, brand_cols=None):
 
 
 def generate():
+    global REGION_HOUJIN_ORDER
     print("データを読み込み中...")
     df = load_data()
+    # 法人設定シートから並び順を読み込む
+    REGION_HOUJIN_ORDER = load_houjin_settings()
     brand_cols, existing_flags, exclude_pr = load_brand_settings()
     if not brand_cols:
         brand_cols = [(b,None) for b in TARGET_BRANDS]
