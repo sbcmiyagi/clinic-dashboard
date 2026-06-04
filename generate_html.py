@@ -118,6 +118,7 @@ def load_houjin_settings():
 REGION_HOUJIN_ORDER = {"国内": [], "海外": []}
 
 DOCTOR_FILE_PATH = Path(r"C:\Users\宮城杏奈\Box\総合企画部_特殊案件\その他\院情報一覧カウント\ドクター人事通達 自動集計.xlsx")
+PAST_DIRECTOR_FILE_PATH = Path(r"C:\Users\宮城杏奈\Downloads\過去分院長変更履歴.xlsx")
 
 
 def load_doctor_data():
@@ -132,6 +133,69 @@ def load_doctor_data():
         return df
     except Exception:
         return pd.DataFrame()
+
+def load_past_director_data():
+    """過去分院長変更履歴から院IDごとの院長変更履歴を構築"""
+    try:
+        if not PAST_DIRECTOR_FILE_PATH.exists():
+            return {}
+
+        # Read raw without header to get exact positions
+        raw = pd.read_excel(PAST_DIRECTOR_FILE_PATH, header=None)
+        # Row 1 (index 1) is the actual column header
+        # Data starts from row 2 (index 2)
+
+        result = {}
+
+        for row_idx in range(2, len(raw)):
+            row = raw.iloc[row_idx]
+
+            clinic_id_val = row.iloc[0]  # TWE院ID = column A
+            if pd.isna(clinic_id_val): continue
+            try:
+                clinic_id = int(float(str(clinic_id_val)))
+            except: continue
+
+            events = []  # list of (date, director_name)
+
+            # Opening director (column AK = index 36)
+            opening_dir = str(row.iloc[36] if len(row) > 36 else "").strip()
+            if opening_dir and opening_dir not in ("-", "", "nan"):
+                events.append((pd.Timestamp("2000-01-01"), opening_dir))
+
+            # Changes 1-10: columns G(6), H(7), I(8) for 1回目, J(9),K(10),L(11) for 2回目, etc.
+            for i in range(10):
+                base_col = 6 + i * 3  # G=6 for 1st change
+                if base_col + 2 >= len(row): break
+
+                change_date_val = row.iloc[base_col]       # 交代日
+                new_dir_val     = row.iloc[base_col + 2]   # 交代分院長 (who came in)
+
+                change_date = to_ts(change_date_val)
+                new_dir = str(new_dir_val or "").strip() if pd.notna(new_dir_val) else ""
+
+                if change_date and new_dir and new_dir not in ("-", "", "nan"):
+                    events.append((change_date, new_dir))
+
+            # Current director with start date (columns C=2, D=3)
+            current_dir = str(row.iloc[2] if len(row) > 2 else "").strip()
+            current_start_val = row.iloc[3] if len(row) > 3 else None
+            current_start = to_ts(current_start_val)
+            if current_dir and current_dir not in ("-", "", "nan") and current_start:
+                events.append((current_start, current_dir))
+
+            # Sort and deduplicate
+            if events:
+                seen = {}
+                for dt, name in events:
+                    seen[dt] = name  # later entries overwrite earlier for same date
+                events = sorted(seen.items(), key=lambda x: x[0])
+                result[clinic_id] = events
+
+        return result
+    except Exception:
+        return {}
+
 
 def extract_doctor_name(raw_name):
     """氏名（よみ）列から漢字名を抽出（読み仮名を除く）"""
@@ -161,85 +225,109 @@ def parse_director_from_detail(detail):
                 return clinic, True
     return None, False
 
-def build_director_pivot(doctor_df, clinic_df):
-    """
-    院長履歴のピボットテーブルを構築
-    Returns: dict {clinic_name: {month_key: doctor_name}}
-    """
-    if doctor_df.empty:
-        return {}, []
-
-    # Get all months from 2025/09 to today
+def build_director_pivot(doctor_df, clinic_df, past_data):
+    """院長履歴のピボットデータを構築（過去データ+人事通達データを統合）"""
     today = date.today()
+
+    # Determine start date: 2021/01
     months = []
-    y, m = 2025, 9
+    y, m = 2021, 1
     while (y, m) <= (today.year, today.month):
         months.append(f"{y}/{m:02d}")
         m += 1
         if m > 12: m = 1; y += 1
 
-    # Build monthly events index
-    events_by_month = {}
-    for _, row in doctor_df.iterrows():
-        date_val = row["付日"]
-        if pd.isna(date_val): continue
-        month_key = f"{date_val.year}/{date_val.month:02d}"
-        if month_key not in events_by_month:
-            events_by_month[month_key] = []
-        events_by_month[month_key].append(row)
+    # Build clinic ID to name mapping
+    id_to_name = {}
+    for _, row in clinic_df.iterrows():
+        cid = row.get("院ID")
+        name = str(row.get("正式名称", "") or "").strip()
+        if pd.notna(cid) and name:
+            try:
+                id_to_name[int(float(str(cid)))] = name
+            except: pass
 
-    # Build cumulative state for each month
-    monthly_director_states = {}
-    state = {}  # {clinic: doctor_name}
-    doctor_clinic = {}  # {doctor: clinic}
+    # Build past director lookup: {clinic_name: [(date, director), ...]}
+    past_by_name = {}
+    for cid, events in past_data.items():
+        if cid in id_to_name:
+            past_by_name[id_to_name[cid]] = events
+
+    # Build monthly events index from doctor_df (2025/09+)
+    events_by_month = {}
+    if not doctor_df.empty:
+        for _, row in doctor_df.iterrows():
+            date_val = row["付日"]
+            if pd.isna(date_val): continue
+            mk = f"{date_val.year}/{date_val.month:02d}"
+            events_by_month.setdefault(mk, []).append(row)
+
+    # Build monthly snapshots
+    monthly_states = {}
+    state = {}  # {clinic_name: doctor_name} for recent data
+    doctor_clinic = {}  # {doctor: clinic} for recent data
 
     for month_key in months:
-        # Process events for this month
-        if month_key in events_by_month:
-            for row in events_by_month[month_key]:
-                kubun = str(row.get("区分", "") or "").strip()
-                detail = str(row.get("異動後/詳細", "") or "")
-                doctor = extract_doctor_name(row.get("氏名（よみ）", ""))
+        yr, mo = int(month_key[:4]), int(month_key[5:])
+        month_end_dt = pd.Timestamp(yr, mo, calendar.monthrange(yr, mo)[1])
 
-                clinic, is_dir = parse_director_from_detail(detail)
+        # Start with past data snapshot for this month
+        snapshot = {}
+        for clinic_name, events in past_by_name.items():
+            director = ""
+            for dt, name in events:
+                if dt <= month_end_dt:
+                    director = name
+                else:
+                    break
+            if director and director not in ("-", ""):
+                snapshot[clinic_name] = director
 
-                if kubun == "退職":
-                    # Remove from current director position
-                    if doctor in doctor_clinic:
-                        old_clinic = doctor_clinic.pop(doctor)
-                        if state.get(old_clinic) == doctor:
-                            state[old_clinic] = ""
-                elif is_dir and clinic:
-                    # Remove from old position if any
-                    if doctor in doctor_clinic:
-                        old_clinic = doctor_clinic[doctor]
-                        if state.get(old_clinic) == doctor:
-                            state[old_clinic] = ""
-                    # Also remove previous director of this clinic from their tracking
-                    prev_director = state.get(clinic, "")
-                    if prev_director and prev_director != doctor:
-                        if doctor_clinic.get(prev_director) == clinic:
-                            del doctor_clinic[prev_director]
-                    state[clinic] = doctor
-                    doctor_clinic[doctor] = clinic
-                elif kubun in ("異動", "昇格") and not is_dir:
-                    # Moving to non-director role - remove from director position
-                    if doctor in doctor_clinic:
-                        old_clinic = doctor_clinic.pop(doctor)
-                        if state.get(old_clinic) == doctor:
-                            state[old_clinic] = ""
+        # From recent data (2025/09+) - process events and override past data
+        if month_key >= "2025/09":
+            if month_key in events_by_month:
+                for row in events_by_month[month_key]:
+                    kubun = str(row.get("区分", "") or "").strip()
+                    detail = str(row.get("異動後/詳細", "") or "")
+                    doctor = extract_doctor_name(row.get("氏名（よみ）", ""))
 
-        # Save snapshot for this month (deep copy)
-        monthly_director_states[month_key] = dict(state)
+                    clinic, is_dir = parse_director_from_detail(detail)
 
-    return monthly_director_states, months
+                    if kubun == "退職":
+                        if doctor in doctor_clinic:
+                            old_clinic = doctor_clinic.pop(doctor)
+                            if state.get(old_clinic) == doctor:
+                                state[old_clinic] = ""
+                    elif is_dir and clinic:
+                        if doctor in doctor_clinic:
+                            old_clinic = doctor_clinic[doctor]
+                            if state.get(old_clinic) == doctor:
+                                state[old_clinic] = ""
+                        prev = state.get(clinic, "")
+                        if prev and prev != doctor and doctor_clinic.get(prev) == clinic:
+                            del doctor_clinic[prev]
+                        state[clinic] = doctor
+                        doctor_clinic[doctor] = clinic
+                    elif kubun in ("異動", "昇格") and not is_dir:
+                        if doctor in doctor_clinic:
+                            old_clinic = doctor_clinic.pop(doctor)
+                            if state.get(old_clinic) == doctor:
+                                state[old_clinic] = ""
+
+            # Override snapshot with recent state
+            for clinic_name, director in state.items():
+                if director:
+                    snapshot[clinic_name] = director
+
+        monthly_states[month_key] = snapshot
+
+    return monthly_states, months
 
 def build_director_html(doctor_df, clinic_df, brand_cols):
     """院長履歴ピボットテーブルHTMLを生成"""
-    if doctor_df.empty:
-        return '<p style="color:#999;font-size:13px">ドクター人事通達ファイルが見つかりません。<br>BOXに「ドクター人事通達 自動集計.xlsx」を保存してください。</p>'
+    past_data = load_past_director_data()
 
-    monthly_states, months = build_director_pivot(doctor_df, clinic_df)
+    monthly_states, months = build_director_pivot(doctor_df, clinic_df, past_data)
     if not months:
         return '<p style="color:#999">データがありません</p>'
 
@@ -431,7 +519,7 @@ def aggregate(df, me, ms, target_brands, exclude_pr):
             k2 = region+"|"+houjin
             r2.setdefault(k2,{"all":0,"pr":0}); r2[k2]["all"]+=1
             if is_pr: r2[k2]["pr"]+=1
-        if check_active(row, ms):
+        if check_active(row, me):
             if houjin in HOUJIN_ORDER:
                 r3.setdefault(houjin,{"all":0})
                 if houjin not in EXCLUDE_HOUJIN: r3[houjin]["all"]+=1
@@ -630,7 +718,7 @@ def aggregate_with_houjin(df, target_brands, exclude_pr, me, ms):
                                 houjin_brand[gname][blabel] = houjin_brand[gname].get(blabel, 0) + 1
                                 break
 
-        if check_active(row, ms):
+        if check_active(row, me):
             if houjin in HOUJIN_ORDER:
                 r3.setdefault(houjin, {"all": 0})
                 if houjin not in EXCLUDE_HOUJIN:
@@ -1073,7 +1161,7 @@ def generate():
             brand = get_brand(row)
             houjin = str(row.get("法人名","") or "").strip()
             if houjin == houjin_name and brand in excl_info["brands"]:
-                if check_active(row, ms):
+                if check_active(row, me):
                     cnt += 1
         excl_counts[houjin_name] = cnt
 
@@ -1287,7 +1375,7 @@ def generate():
 
 <div id="houjin" class="content">
   <div class="box">
-    <div class="section-title">{y}年{m}月初 法人別内訳（月初時点／経理用）</div>
+    <div class="section-title">{y}年{m}月末 法人別集計（フィー計算）</div>
     {df_to_html_table(houjin_df, right_align_nums=True)}
   </div>
 </div>
@@ -1361,7 +1449,7 @@ def generate():
 <div id="director" class="content">
   <div class="box">
     <div class="section-title">院長履歴（月末時点）</div>
-    <p style="font-size:12px;color:#666;margin-bottom:8px">※2025年9月以降のデータを表示。黄色セルは院長交代。</p>
+    <p style="font-size:12px;color:#666;margin-bottom:8px">※過去分院長変更履歴（2021年〜）および2025年9月以降の人事通達データを統合表示。黄色セルは院長交代。</p>
     {director_html}
   </div>
 </div>
@@ -1376,7 +1464,9 @@ const UNIQUE_BRANDS = {brands_json};
 const HOUJIN_ORDER = {houjin_order_json};
 const LABEL_IR = {json.dumps(LABEL_IR, ensure_ascii=False)};
 const LABEL_ALL = {json.dumps(LABEL_ALL, ensure_ascii=False)};
-const ORANGE_TWIST_COUNT = {ORANGE_TWIST_COUNT};
+const ORANGE_TWIST_COUNT = {ot_settings["count"]};
+const OT_START = "{ot_settings["start"]}";
+function getOT(monthKey) {{ return monthKey >= OT_START ? ORANGE_TWIST_COUNT : 0; }}
 
 function showTab(id, el) {{
   document.querySelectorAll('.content').forEach(e=>e.classList.remove('active'));
@@ -1506,12 +1596,15 @@ function buildCompareTable(startKey, endKey) {{
     html += '</tr>';
   }}
 
-  // OrangeTwist行（固定値24）
+  // OrangeTwist行（開始年月を考慮）
+  const startOT = getOT(startKey);
+  const endOT   = getOT(endKey);
+  const diffOT  = endOT - startOT;
   html += '<tr style="background:#FFF9C4">';
   html += '<td style="text-align:left">OrangeTwist</td>';
-  html += '<td style="text-align:right">' + ORANGE_TWIST_COUNT + '</td>';
-  html += '<td style="text-align:right">' + ORANGE_TWIST_COUNT + '</td>';
-  html += '<td style="text-align:right">+0</td>';
+  html += '<td style="text-align:right">' + startOT + '</td>';
+  html += '<td style="text-align:right">' + endOT   + '</td>';
+  html += '<td style="text-align:right;' + diffStyle(diffOT) + '">' + diffStr(diffOT) + '</td>';
   html += '<td style="text-align:right;color:#888">別管理</td>';
   html += '<td style="text-align:right;color:#888">別管理</td>';
   html += '<td style="text-align:right;color:#888">－</td>';
@@ -1520,7 +1613,7 @@ function buildCompareTable(startKey, endKey) {{
   // 合計行（IR・広報用＝ブランド合計＋OrangeTwist）
   const sPr  = startData.sum_pr,  ePr  = endData.sum_pr;
   const sAll = startData.sum_all, eAll = endData.sum_all;
-  const sIR  = sPr  + ORANGE_TWIST_COUNT, eIR = ePr  + ORANGE_TWIST_COUNT;
+  const sIR  = sPr + startOT, eIR = ePr + endOT;  // OrangeTwistは開始年月を考慮
   const dIR  = eIR  - sIR,  dAll = eAll - sAll;
   html += '<tr style="background:#E67E22;color:white;font-weight:bold">';
   html += '<td style="text-align:left">合計</td>';
