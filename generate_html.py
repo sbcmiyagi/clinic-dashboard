@@ -387,17 +387,41 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     # Build HTML table
     th_style = f'padding:6px 10px;border:1px solid #555;background:{C_HEADER};color:white;white-space:nowrap;font-size:12px'
 
-    headers = f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:40px">院ID</th>'
-    headers += f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:180px">院名</th>'
+    # ③ ヘッダー固定: position:sticky;top:0
+    headers = f'<th style="{th_style};position:sticky;top:0;left:0;z-index:5;min-width:40px">院ID</th>'
+    headers += f'<th style="{th_style};position:sticky;top:0;left:0;z-index:5;min-width:180px">院名</th>'
+    headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:100px">現院長</th>'
+    headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:70px">就任時期</th>'
     for mk in months:
-        headers += f'<th style="{th_style};min-width:80px">{mk}</th>'
+        headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:80px">{mk}</th>'
+
+    def get_current_director_info(clinic, limit_before=None, limit_from=None):
+        """現院長と就任時期を返す"""
+        current = ""
+        start_month = ""
+        prev = ""
+        for mk in months:
+            if limit_before and mk >= limit_before: continue
+            if limit_from and mk < limit_from: continue
+            doc = monthly_states.get(mk, {}).get(clinic, "")
+            if doc and doc != prev:
+                current = doc
+                start_month = mk
+            elif not doc:
+                pass
+            prev = doc if doc else prev
+        return current, start_month
 
     def make_clinic_row(clinic, limit_before=None, limit_from=None, row_bg="white"):
         """1院分の行HTMLを生成。limit_before=この月より後は空白、limit_from=この月より前は空白"""
         prev_doctor = ""
         cid_val = clinic_id_map.get(clinic, "")
+        # ① 現院長・就任時期
+        cur_dir, cur_start = get_current_director_info(clinic, limit_before, limit_from)
         cells  = f'<td style="padding:5px 8px;border:1px solid #ddd;background:{row_bg};font-size:12px;text-align:right;color:#666">{cid_val}</td>'
         cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:{row_bg};font-size:12px;white-space:nowrap">{clinic}</td>'
+        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:{row_bg};font-size:12px;font-weight:bold;color:#2C3E50">{cur_dir}</td>'
+        cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:{row_bg};font-size:11px;color:#666;text-align:center">{cur_start}</td>'
         for mk in months:
             # 業態転換による表示範囲制限
             if limit_before and mk >= limit_before:
@@ -413,7 +437,7 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             elif changed:
                 bg = "#FFF9C4"; color = "#333"; txt = doctor
             else:
-                bg = row_bg if row_bg != "white" else "white"; color = "#333"; txt = doctor
+                bg = row_bg; color = "#333"; txt = doctor
             cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:{bg};color:{color};font-size:12px;white-space:nowrap;text-align:center">{txt}</td>'
             if doctor: prev_doctor = doctor
         return f"<tr>{cells}</tr>"
@@ -433,7 +457,7 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             )
             # 転換後の行（転換月以降のみ）
             if new_name in clinics_with_data:
-                rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F8F0FF")
+                rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#EDE7F6")
         else:
             rows_html += make_clinic_row(clinic)
 
