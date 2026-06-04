@@ -151,6 +151,133 @@ def aggregate(df, me, ms, target_brands, exclude_pr):
                 if houjin not in EXCLUDE_HOUJIN: r3[houjin]["all"]+=1
     return r1, r2, r3
 
+def get_base_date(row):
+    ma = to_ts(row.get("MA日")); op = to_ts(row.get("開院日"))
+    return ma if ma is not None else op
+
+def build_history(df, target_brands, exclude_pr):
+    """年別・月別の開院・閉院・業態転換データを構築"""
+    today = date.today()
+    all_dates = pd.concat([df["開院日"].dropna(), df["MA日"].dropna(),
+                           df["閉院日"].dropna(), df["業態転換日"].dropna()])
+    data_max_year = int(all_dates.dt.year.max()) if not all_dates.empty else today.year
+    hist_years = list(range(2025, max(data_max_year, today.year) + 1))
+    result = {}
+    for year in hist_years:
+        monthly = {}
+        for month in range(1, 13):
+            ms = pd.Timestamp(year, month, 1)
+            me = pd.Timestamp(year, month, calendar.monthrange(year, month)[1])
+            opened, closed, convert = [], [], []
+            for _, row in df.iterrows():
+                brand = get_brand(row)
+                if not brand or brand not in target_brands: continue
+                base = get_base_date(row)
+                d_conv = to_ts(row.get("業態転換日")); d_close = to_ts(row.get("閉院日"))
+                # 開院
+                tenkan_mae = str(row.get("転換前業態","") or "").strip()
+                is_converted = tenkan_mae not in ("","nan")
+                if base is not None:
+                    base_only = pd.Timestamp(base.year, base.month, base.day)
+                    if ms <= base_only <= me:
+                        opened.append({
+                            "種別": "🔵 業態転換" if is_converted else "🟢 新規開院",
+                            "開院日": base_only.strftime("%Y/%m/%d"),
+                            "院名": row.get("正式名称",""), "ブランド": brand,
+                            "業態": str(row.get("業態","") or ""),
+                            "法人名": str(row.get("法人名","") or ""),
+                            "国内／海外": get_region(row),
+                        })
+                # 業態転換
+                if d_conv is not None:
+                    conv_only = pd.Timestamp(d_conv.year, d_conv.month, d_conv.day)
+                    if ms <= conv_only <= me:
+                        before = str(row.get("転換前業態","") or "").strip()
+                        if not before or before=="nan": before = str(row.get("業態","") or "").strip()
+                        after_n = str(row.get("転換後院名","") or "").strip()
+                        after_g = str(row.get("転換後業態","") or "").strip()
+                        convert.append({
+                            "転換前院名": row.get("正式名称",""), "転換前ブランド": brand,
+                            "転換前業態": before if before else "―", "　": "→",
+                            "転換後院名": after_n if after_n else "―",
+                            "転換後業態": after_g if after_g else "―",
+                            "法人名": str(row.get("法人名","") or ""),
+                            "国内／海外": get_region(row),
+                            "業態転換日": conv_only.strftime("%Y/%m/%d"),
+                        })
+                # 閉院
+                close_ref = d_close if d_close is not None else d_conv
+                if close_ref is not None:
+                    close_only = pd.Timestamp(close_ref.year, close_ref.month, close_ref.day)
+                    if ms <= close_only <= me:
+                        closed.append({
+                            "種別": "🔵 業態転換" if d_conv is not None else "🔴 閉院",
+                            "閉院日": close_only.strftime("%Y/%m/%d"),
+                            "院名": row.get("正式名称",""), "ブランド": brand,
+                            "業態": str(row.get("業態","") or ""),
+                            "法人名": str(row.get("法人名","") or ""),
+                            "国内／海外": get_region(row),
+                        })
+            monthly[month] = {"opened": opened, "closed": closed, "convert": convert}
+        result[year] = monthly
+    return result, hist_years
+
+def build_history_html(history, hist_years, mode="openclose"):
+    """開院・閉院または業態転換のアコーディオンHTMLを生成"""
+    html = ""
+    uid = 0
+    for year in hist_years:
+        monthly = history[year]
+        if mode == "openclose":
+            ytotal_o = sum(len(v["opened"]) for v in monthly.values())
+            ytotal_c = sum(len(v["closed"]) for v in monthly.values())
+            if ytotal_o == 0 and ytotal_c == 0: continue
+            year_label = f"📅 {year}年　｜　🟢 開院 {ytotal_o} 院　　🔴 閉院 {ytotal_c} 院"
+            color = C_HEADER
+        else:
+            ytotal_k = sum(len(v["convert"]) for v in monthly.values())
+            if ytotal_k == 0: continue
+            year_label = f"📅 {year}年　｜　🔵 業態転換 {ytotal_k} 院"
+            color = C_BLUE
+
+        html += f'<div style="background:{color};color:white;padding:10px 16px;font-weight:bold;font-size:16px;border-radius:6px;margin-top:20px">{year_label}</div>'
+
+        for month in range(1, 13):
+            opened  = monthly[month]["opened"]
+            closed  = monthly[month]["closed"]
+            convert = monthly[month]["convert"]
+            uid += 1
+
+            if mode == "openclose":
+                n_o = len(opened); n_c = len(closed)
+                if n_o == 0 and n_c == 0: continue
+                label = f"{year}年{month}月　🟢 開院 {n_o}院　　🔴 閉院 {n_c}院"
+                inner = ""
+                if n_o > 0:
+                    inner += f'<div style="border-left:4px solid #27AE60;background:#D5F5E3;padding:5px 10px;font-weight:bold;margin-bottom:6px">🟢 開院　{n_o}院</div>'
+                    inner += df_to_html_table(pd.DataFrame(opened), highlight_last=False)
+                    inner += "<br>"
+                if n_c > 0:
+                    inner += f'<div style="border-left:4px solid #E74C3C;background:#FADBD8;padding:5px 10px;font-weight:bold;margin-bottom:6px">🔴 閉院　{n_c}院</div>'
+                    inner += df_to_html_table(pd.DataFrame(closed), highlight_last=False)
+            else:
+                n_k = len(convert)
+                if n_k == 0: continue
+                label = f"{year}年{month}月　🔵 業態転換 {n_k}院"
+                inner = f'<div style="border-left:4px solid {C_BLUE};background:#D6EAF8;padding:5px 10px;font-weight:bold;margin-bottom:6px">🔵 業態転換　{n_k}院</div>'
+                inner += df_to_html_table(pd.DataFrame(convert), highlight_last=False)
+
+            html += f"""
+<div style="margin-top:8px;border:1px solid #ddd;border-radius:6px;overflow:hidden">
+  <div onclick="toggleAcc('acc{uid}')" style="padding:10px 16px;cursor:pointer;background:#f8f9fa;display:flex;align-items:center;gap:8px">
+    <span id="arr{uid}" style="font-size:12px">▶</span> {label}
+  </div>
+  <div id="acc{uid}" style="display:none;padding:16px">
+    {inner}
+  </div>
+</div>"""
+    return html
+
 def df_to_html_table(df, highlight_last=True, orange_last=False):
     rows_html = ""
     for i, (_, row) in enumerate(df.iterrows()):
@@ -245,6 +372,12 @@ def generate():
     fig2.update_layout(yaxis=dict(autorange="reversed"),margin=dict(t=30))
     chart2_html = fig2.to_html(full_html=False, include_plotlyjs=False)
 
+    # ── 開院・閉院・業態転換履歴 ──
+    print("開院・閉院・業態転換履歴を集計中...")
+    history, hist_years = build_history(df, [b for b,_ in brand_cols], exclude_pr)
+    openclose_html = build_history_html(history, hist_years, mode="openclose")
+    convert_html   = build_history_html(history, hist_years, mode="convert")
+
     # ── HTML生成 ──
     report_date = f"{y}年{m}月末"
     html = f"""<!DOCTYPE html>
@@ -301,6 +434,8 @@ def generate():
   <div class="tab" onclick="showTab('region')">🌏 国内／海外×法人</div>
   <div class="tab" onclick="showTab('houjin')">🏢 法人別</div>
   <div class="tab" onclick="showTab('trend')">📈 時系列推移</div>
+  <div class="tab" onclick="showTab('history')">🏥 開院・閉院履歴</div>
+  <div class="tab" onclick="showTab('convert')">🔵 業態転換履歴</div>
 </div>
 
 <div id="brand" class="content active">
@@ -339,6 +474,16 @@ def generate():
   </div>
 </div>
 
+<div id="history" class="content">
+  <h3 style="margin-top:0">開院・閉院 年別・月別履歴</h3>
+  {openclose_html}
+</div>
+
+<div id="convert" class="content">
+  <h3 style="margin-top:0">業態転換 年別・月別履歴</h3>
+  {convert_html}
+</div>
+
 <div class="updated">最終更新: {today.strftime('%Y/%m/%d')}</div>
 
 <script>
@@ -347,6 +492,12 @@ function showTab(id){{
   document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   event.target.classList.add('active');
+}}
+function toggleAcc(id){{
+  var el=document.getElementById(id);
+  var arr=document.getElementById('arr'+id.replace('acc',''));
+  if(el.style.display==='none'){{el.style.display='block';arr.textContent='▼';}}
+  else{{el.style.display='none';arr.textContent='▶';}}
 }}
 </script>
 </body>
