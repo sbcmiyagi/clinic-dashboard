@@ -354,19 +354,36 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     if not clinics_with_data:
         return '<p style="color:#999">院長データが見つかりません。ファイルの内容を確認してください。</p>'
 
+    # 院IDをキーにした院名リストを作成（院ID順でソート）
+    clinic_id_map = {}
+    for _, row in clinic_df.iterrows():
+        name = str(row.get("正式名称","") or "").strip()
+        cid  = row.get("院ID")
+        if name and pd.notna(cid):
+            try:
+                clinic_id_map[name] = int(float(str(cid)))
+            except: pass
+    # 院IDがある院は院ID順、ない院は末尾に名前順
+    clinics_sorted = sorted(
+        clinics_with_data,
+        key=lambda c: (clinic_id_map.get(c, 999999), c)
+    )
+
     # Build HTML table
-    # Header
     th_style = f'padding:6px 10px;border:1px solid #555;background:{C_HEADER};color:white;white-space:nowrap;font-size:12px'
 
-    headers = f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:180px">院名</th>'
+    headers = f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:30px">院ID</th>'
+    headers += f'<th style="{th_style};position:sticky;left:0;z-index:2;min-width:180px">院名</th>'
     for mk in months:
         headers += f'<th style="{th_style};min-width:80px">{mk}</th>'
 
     # Rows
     rows_html = ""
-    for clinic in sorted(clinics_with_data):
+    for clinic in clinics_sorted:
         prev_doctor = ""
-        cells = f'<td style="padding:5px 10px;border:1px solid #ddd;position:sticky;left:0;background:white;font-size:12px;white-space:nowrap;z-index:1">{clinic}</td>'
+        cid_val = clinic_id_map.get(clinic, "")
+        cells  = f'<td style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:0;background:white;font-size:12px;text-align:right;color:#666;z-index:1">{cid_val}</td>'
+        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:white;font-size:12px;white-space:nowrap;z-index:1">{clinic}</td>'
         for mk in months:
             doctor = monthly_states.get(mk, {}).get(clinic, "")
             changed = doctor and doctor != prev_doctor and prev_doctor != ""
