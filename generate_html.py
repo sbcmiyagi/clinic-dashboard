@@ -135,10 +135,14 @@ def load_doctor_data():
         return pd.DataFrame()
 
 def load_past_director_data():
-    """過去分院長変更履歴から院IDごとの院長変更履歴を構築"""
+    """過去分院長変更履歴から院IDごとの院長変更履歴を構築
+    Returns: (result, current_info)
+      result: {clinic_id: [(date, director_name), ...]}
+      current_info: {clinic_id: (current_director, start_date_str)} D列の着任日
+    """
     try:
         if not PAST_DIRECTOR_FILE_PATH.exists():
-            return {}
+            return {}, {}
 
         # Read raw without header to get exact positions
         raw = pd.read_excel(PAST_DIRECTOR_FILE_PATH, header=None)
@@ -146,6 +150,7 @@ def load_past_director_data():
         # Data starts from row 2 (index 2)
 
         result = {}
+        current_info = {}  # {clinic_id: (director_name, "YYYY/MM")}
 
         for row_idx in range(2, len(raw)):
             row = raw.iloc[row_idx]
@@ -183,18 +188,23 @@ def load_past_director_data():
             current_start = to_ts(current_start_val)
             if current_dir and current_dir not in ("-", "", "nan") and current_start:
                 events.append((current_start, current_dir))
+                # D列の着任日を current_info に保存（YYYY/MM形式）
+                current_info[clinic_id] = (
+                    current_dir,
+                    f"{current_start.year}/{current_start.month:02d}"
+                )
 
             # Sort and deduplicate
             if events:
                 seen = {}
                 for dt, name in events:
-                    seen[dt] = name  # later entries overwrite earlier for same date
+                    seen[dt] = name
                 events = sorted(seen.items(), key=lambda x: x[0])
                 result[clinic_id] = events
 
-        return result
+        return result, current_info
     except Exception:
-        return {}
+        return {}, {}
 
 
 def extract_doctor_name(raw_name):
@@ -356,7 +366,7 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
 
 def build_director_html(doctor_df, clinic_df, brand_cols):
     """院長履歴ピボットテーブルHTMLを生成"""
-    past_data = load_past_director_data()
+    past_data, past_current_info = load_past_director_data()
 
     monthly_states, months = build_director_pivot(doctor_df, clinic_df, past_data)
     if not months:
@@ -444,8 +454,17 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     for mk in months:
         headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:80px">{mk}</th>'
 
+    # 院ID → clinic_name の逆引きマップ（past_current_infoをclinic名で使うため）
+    id_to_clinic_name = {v: k for k, v in clinic_id_map.items()}
+    # clinic名 → D列の着任日 マップ
+    clinic_exact_start = {}
+    for cid, (dir_name, start_str) in past_current_info.items():
+        clinic_name = id_to_clinic_name.get(cid, "")
+        if clinic_name:
+            clinic_exact_start[clinic_name] = (dir_name, start_str)
+
     def get_current_director_info(clinic, limit_before=None, limit_from=None):
-        """現院長と就任時期を返す"""
+        """現院長と就任時期を返す（D列の着任日を優先使用）"""
         current = ""
         start_month = ""
         prev = ""
@@ -459,6 +478,13 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             elif not doc:
                 pass
             prev = doc if doc else prev
+
+        # D列の着任日が存在し院長名が一致する場合はそちらを優先
+        if current and clinic in clinic_exact_start:
+            exact_dir, exact_start = clinic_exact_start[clinic]
+            if exact_dir == current:
+                start_month = exact_start
+
         return current, start_month
 
     def make_clinic_row(clinic, limit_before=None, limit_from=None, row_bg="white"):
