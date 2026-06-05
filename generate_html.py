@@ -407,11 +407,16 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     # Build HTML table
     th_style = f'padding:6px 10px;border:1px solid #555;background:{C_HEADER};color:white;white-space:nowrap;font-size:12px'
 
-    # ③ ヘッダー固定: position:sticky;top:0
-    headers = f'<th style="{th_style};position:sticky;top:0;left:0;z-index:5;min-width:40px">院ID</th>'
-    headers += f'<th style="{th_style};position:sticky;top:0;left:0;z-index:5;min-width:180px">院名</th>'
-    headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:100px">現院長</th>'
-    headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:70px">就任時期</th>'
+    # 左4列を固定（各列のleft位置を積算で指定）
+    W_ID   = 44   # 院ID列幅
+    W_NAME = 184  # 院名列幅
+    W_DIR  = 104  # 現院長列幅
+    W_DATE = 74   # 就任時期列幅
+    sticky = 'position:sticky;top:0;z-index:5;background:{C_HEADER}'
+    headers  = f'<th style="{th_style};position:sticky;top:0;left:0px;z-index:5;min-width:{W_ID}px">院ID</th>'
+    headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID}px;z-index:5;min-width:{W_NAME}px">院名</th>'
+    headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_NAME}px;z-index:5;min-width:{W_DIR}px">現院長</th>'
+    headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_NAME+W_DIR}px;z-index:5;min-width:{W_DATE}px">就任時期</th>'
     for mk in months:
         headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:80px">{mk}</th>'
 
@@ -438,10 +443,12 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
         cid_val = clinic_id_map.get(clinic, "")
         # ① 現院長・就任時期
         cur_dir, cur_start = get_current_director_info(clinic, limit_before, limit_from)
-        cells  = f'<td style="padding:5px 8px;border:1px solid #ddd;background:{row_bg};font-size:12px;text-align:right;color:#666">{cid_val}</td>'
-        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:{row_bg};font-size:12px;white-space:nowrap">{clinic}</td>'
-        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;background:{row_bg};font-size:12px;font-weight:bold;color:#2C3E50">{cur_dir}</td>'
-        cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:{row_bg};font-size:11px;color:#666;text-align:center">{cur_start}</td>'
+        # 左4列をsticky固定（left位置を積算）
+        text_color = "#333" if row_bg != "white" else "#333"
+        cells  = f'<td style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:0px;background:{row_bg};font-size:12px;text-align:right;color:#666;z-index:1">{cid_val}</td>'
+        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;position:sticky;left:{W_ID}px;background:{row_bg};font-size:12px;white-space:nowrap;color:{text_color};z-index:1">{clinic}</td>'
+        cells += f'<td style="padding:5px 10px;border:1px solid #ddd;position:sticky;left:{W_ID+W_NAME}px;background:{row_bg};font-size:12px;font-weight:bold;color:#2C3E50;z-index:1">{cur_dir}</td>'
+        cells += f'<td style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:{W_ID+W_NAME+W_DIR}px;background:{row_bg};font-size:11px;color:#555;text-align:center;z-index:1">{cur_start}</td>'
         for mk in months:
             # 業態転換による表示範囲制限
             if limit_before and mk >= limit_before:
@@ -467,17 +474,17 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     for clinic in clinics_sorted_main:
         if clinic in conversion_map:
             new_name, conv_month = conversion_map[clinic]
-            # 転換前の行（転換月より前のみ）
-            rows_html += make_clinic_row(clinic, limit_before=conv_month, row_bg="white")
+            # 転換前の行：濃い紫
+            rows_html += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2")
             # 区切り行：業態転換マーカー
-            n_cols = len(months) + 2
+            n_cols = len(months) + 4  # 院ID+院名+現院長+就任時期+月列
             rows_html += (
-                f'<tr><td colspan="{n_cols}" style="padding:2px 10px;background:#E8DAEF;'
-                f'color:#6c3483;font-size:11px;text-align:center">▼ 業態転換 {conv_month} ▼</td></tr>'
+                f'<tr><td colspan="{n_cols}" style="padding:2px 10px;background:#8E44AD;'
+                f'color:white;font-size:11px;text-align:center;font-weight:bold">▼ 業態転換 {conv_month} ▼</td></tr>'
             )
-            # 転換後の行（転換月以降のみ）
+            # 転換後の行：薄い紫
             if new_name in clinics_with_data:
-                rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#EDE7F6")
+                rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
         else:
             rows_html += make_clinic_row(clinic)
 
@@ -485,8 +492,9 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       <span>凡例：</span>
       <span style="background:#FFF9C4;padding:2px 8px;border:1px solid #ddd">院長交代</span>
       <span style="background:white;padding:2px 8px;border:1px solid #ddd">継続</span>
-      <span style="background:#E8DAEF;padding:2px 8px;border:1px solid #ddd;color:#6c3483">▼ 業態転換</span>
-      <span style="background:#F8F0FF;padding:2px 8px;border:1px solid #ddd">転換後の院</span>
+      <span style="background:#D7BDE2;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換前の院（濃い紫）</span>
+      <span style="background:#8E44AD;color:white;padding:2px 8px;border:1px solid #ddd">▼ 業態転換</span>
+      <span style="background:#F3E5F5;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換後の院（薄い紫）</span>
       <span style="background:#f0f0f0;padding:2px 8px;border:1px solid #ddd;color:#999">対象外期間</span>
       <span style="color:#ccc;padding:2px 8px;border:1px solid #ddd">―　記録なし</span>
     </div>'''
