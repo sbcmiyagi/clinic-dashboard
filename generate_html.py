@@ -393,7 +393,10 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
         old_name = str(row.get("正式名称","") or "").strip()
         if d_conv and new_name and old_name:
             conv_month = f"{d_conv.year}/{d_conv.month:02d}"
-            conversion_map[old_name] = (new_name, conv_month)
+            old_id = clinic_id_map.get(old_name)
+            new_id = clinic_id_map.get(new_name)
+            same_id = (old_id is not None and new_id is not None and old_id == new_id)
+            conversion_map[old_name] = (new_name, conv_month, same_id, old_id, new_id)
             converted_new.add(new_name)
 
     # 院IDがある院は院ID順、ない院は末尾に名前順
@@ -469,36 +472,93 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             if doctor: prev_doctor = doctor
         return f"<tr>{cells}</tr>"
 
-    # Rows
-    rows_html = ""
+    # ── ビュー1: 院ID順 ──
+    rows_id = ""
     for clinic in clinics_sorted_main:
         if clinic in conversion_map:
-            new_name, conv_month = conversion_map[clinic]
-            # 転換前の行：濃い紫
-            rows_html += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2")
-            # 転換後の行：薄い紫
+            new_name, conv_month, same_id, old_id, new_id = conversion_map[clinic]
+            rows_id += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2")
             if new_name in clinics_with_data:
-                rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
+                rows_id += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
         else:
-            rows_html += make_clinic_row(clinic)
+            rows_id += make_clinic_row(clinic)
 
-    legend = '''<div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;align-items:center;flex-wrap:wrap">
+    # ── ビュー2: 業態転換グループ順 ──
+    rows_group = ""
+    shown_in_group = set()
+    # 転換ペアをまとめて表示（旧院のIDでソート）
+    conv_pairs = sorted(
+        [(old, info) for old, info in conversion_map.items() if old in clinics_with_data or info[0] in clinics_with_data],
+        key=lambda x: (clinic_id_map.get(x[0], 999999), x[0])
+    )
+    for old_clinic, (new_name, conv_month, same_id, old_id, new_id) in conv_pairs:
+        # グループヘッダー
+        id_badge = (
+            f'🔵 同ID（{old_id}）' if same_id
+            else f'🔴 ID変更（{old_id} → {new_id}）'
+        )
+        rows_group += (
+            f'<tr><td colspan="{len(months)+4}" style="padding:4px 12px;'
+            f'background:#4A235A;color:white;font-size:11px;font-weight:bold">'
+            f'業態転換 {conv_month}　{id_badge}</td></tr>'
+        )
+        rows_group += make_clinic_row(old_clinic, limit_before=conv_month, row_bg="#D7BDE2")
+        if new_name in clinics_with_data:
+            rows_group += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
+        shown_in_group.add(old_clinic)
+        shown_in_group.add(new_name)
+
+    # 転換に関係ない院を院ID順で追加
+    for clinic in clinics_sorted:
+        if clinic not in shown_in_group and clinic in clinics_with_data:
+            rows_group += make_clinic_row(clinic)
+
+    legend = '''<div style="display:flex;gap:12px;margin-bottom:8px;font-size:12px;align-items:center;flex-wrap:wrap">
       <span>凡例：</span>
       <span style="background:#FFF9C4;padding:2px 8px;border:1px solid #ddd">院長交代</span>
-      <span style="background:white;padding:2px 8px;border:1px solid #ddd">継続</span>
-      <span style="background:#D7BDE2;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換前の院（濃い紫）</span>
-
-      <span style="background:#F3E5F5;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換後の院（薄い紫）</span>
+      <span style="background:#D7BDE2;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換前</span>
+      <span style="background:#F3E5F5;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換後</span>
       <span style="background:#f0f0f0;padding:2px 8px;border:1px solid #ddd;color:#999">対象外期間</span>
       <span style="color:#ccc;padding:2px 8px;border:1px solid #ddd">―　記録なし</span>
+      &nbsp;│&nbsp;
+      <span>🔵 同ID引き継ぎ</span>
+      <span>🔴 ID変更</span>
     </div>'''
+
+    toggle_btn = '''<div style="margin-bottom:8px;display:flex;gap:8px">
+      <button id="btnViewId" onclick="switchView('id')"
+        style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#2C3E50;color:white;font-weight:bold">
+        院ID順
+      </button>
+      <button id="btnViewGroup" onclick="switchView('group')"
+        style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
+        業態転換グループ順
+      </button>
+    </div>
+    <script>
+    function switchView(mode) {
+      document.getElementById('dirViewId').style.display    = mode==='id'    ? '' : 'none';
+      document.getElementById('dirViewGroup').style.display = mode==='group' ? '' : 'none';
+      document.getElementById('btnViewId').style.background    = mode==='id'    ? '#2C3E50' : '#ddd';
+      document.getElementById('btnViewId').style.color         = mode==='id'    ? 'white'   : '#333';
+      document.getElementById('btnViewGroup').style.background = mode==='group' ? '#2C3E50' : '#ddd';
+      document.getElementById('btnViewGroup').style.color      = mode==='group' ? 'white'   : '#333';
+    }
+    </script>'''
 
     table = f'''
     {legend}
-    <div style="overflow-x:auto;overflow-y:auto;max-height:70vh">
+    {toggle_btn}
+    <div id="dirViewId" style="overflow-x:auto;overflow-y:auto;max-height:70vh">
     <table style="border-collapse:collapse;font-size:12px">
     <thead><tr>{headers}</tr></thead>
-    <tbody>{rows_html}</tbody>
+    <tbody>{rows_id}</tbody>
+    </table>
+    </div>
+    <div id="dirViewGroup" style="display:none;overflow-x:auto;overflow-y:auto;max-height:70vh">
+    <table style="border-collapse:collapse;font-size:12px">
+    <thead><tr>{headers}</tr></thead>
+    <tbody>{rows_group}</tbody>
     </table>
     </div>'''
 
