@@ -476,12 +476,6 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             new_name, conv_month = conversion_map[clinic]
             # 転換前の行：濃い紫
             rows_html += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2")
-            # 区切り行：業態転換マーカー
-            n_cols = len(months) + 4  # 院ID+院名+現院長+就任時期+月列
-            rows_html += (
-                f'<tr><td colspan="{n_cols}" style="padding:2px 10px;background:#8E44AD;'
-                f'color:white;font-size:11px;text-align:center;font-weight:bold">▼ 業態転換 {conv_month} ▼</td></tr>'
-            )
             # 転換後の行：薄い紫
             if new_name in clinics_with_data:
                 rows_html += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
@@ -493,7 +487,7 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       <span style="background:#FFF9C4;padding:2px 8px;border:1px solid #ddd">院長交代</span>
       <span style="background:white;padding:2px 8px;border:1px solid #ddd">継続</span>
       <span style="background:#D7BDE2;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換前の院（濃い紫）</span>
-      <span style="background:#8E44AD;color:white;padding:2px 8px;border:1px solid #ddd">▼ 業態転換</span>
+
       <span style="background:#F3E5F5;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換後の院（薄い紫）</span>
       <span style="background:#f0f0f0;padding:2px 8px;border:1px solid #ddd;color:#999">対象外期間</span>
       <span style="color:#ccc;padding:2px 8px;border:1px solid #ddd">―　記録なし</span>
