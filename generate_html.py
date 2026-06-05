@@ -237,6 +237,14 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
         m += 1
         if m > 12: m = 1; y += 1
 
+    # TWE表記 → 正式名称のマッピング（人事通達の略称を正式名称に統一するため）
+    twe_to_fullname = {}
+    for _, row in clinic_df.iterrows():
+        name = str(row.get("正式名称", "") or "").strip()
+        twe  = str(row.get("TWE表記", "") or "").strip()
+        if name and twe and twe not in ("nan", ""):
+            twe_to_fullname[twe] = name
+
     # Build clinic ID to name mapping
     # 業態転換がある院は「転換前の院名」を優先（歴史データのマッピングに使う）
     id_to_name = {}
@@ -312,6 +320,9 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                     doctor = extract_doctor_name(row.get("氏名（よみ）", ""))
 
                     clinic, is_dir = parse_director_from_detail(detail)
+                    # 略称（TWE表記）を正式名称に変換して重複表示を防ぐ
+                    if clinic and clinic in twe_to_fullname:
+                        clinic = twe_to_fullname[clinic]
 
                     if kubun == "退職":
                         if doctor in doctor_clinic:
