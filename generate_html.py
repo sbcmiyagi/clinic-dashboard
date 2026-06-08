@@ -418,6 +418,37 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
 
         monthly_states[month_key] = snapshot
 
+    # ── 院長履歴スナップショット比較による退職・昇格の自動補完 ──
+    # 人事通達データのない月（2025/08以前）や未記入の退職を補う
+    for i, month_key in enumerate(months):
+        if i == 0: continue
+        prev_month = months[i - 1]
+        prev_state = monthly_states.get(prev_month, {})
+        cur_state  = monthly_states.get(month_key,  {})
+
+        # 院長→クリニック の逆引きマップ
+        prev_dr = {d: c for c, d in prev_state.items() if d and d not in ('-', '', 'nan')}
+        cur_dr  = {d: c for c, d in cur_state.items()  if d and d not in ('-', '', 'nan')}
+
+        # 前月は院長だったが今月はどこにも院長として現れない人 → 退職と判定
+        for doctor in set(prev_dr) - set(cur_dr):
+            old_clinic = prev_dr[doctor]
+            new_doctor = cur_state.get(old_clinic, "")
+            # そのクリニックに新しい院長が就任している場合のみ記録（空席のままは除外）
+            if new_doctor and new_doctor != doctor:
+                if not any(e["doctor"] == doctor
+                           for e in resignation_events.get(month_key, [])):
+                    resignation_events.setdefault(month_key, []).append(
+                        {"doctor": doctor, "clinic": old_clinic})
+
+        # 今月初めて院長になった人（前月は院長ではなかった）→ 昇格と判定
+        for doctor in set(cur_dr) - set(prev_dr):
+            new_clinic = cur_dr[doctor]
+            if not any(e["doctor"] == doctor
+                       for e in promotion_events.get(month_key, [])):
+                promotion_events.setdefault(month_key, []).append(
+                    {"doctor": doctor, "from": "（昇格）", "to": new_clinic, "kubun": "昇格"})
+
     return monthly_states, months, promotion_events, resignation_events
 
 def build_director_html(doctor_df, clinic_df, brand_cols):
