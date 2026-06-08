@@ -304,6 +304,7 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
     monthly_states = {}
     state = {}  # {clinic_name: doctor_name} for recent data
     doctor_clinic = {}  # {doctor: clinic} for recent data
+    promotion_events = {}  # {month_key: [{doctor, from, to, kubun}]}
 
     for month_key in months:
         yr, mo = int(month_key[:4]), int(month_key[5:])
@@ -330,9 +331,11 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                     doctor = extract_doctor_name(row.get("氏名（よみ）", ""))
 
                     clinic, is_dir = parse_director_from_detail(detail)
-                    # 略称（TWE表記）を正式名称に変換して重複表示を防ぐ
+                    # 略称（TWE表記）を正式名称に変換（「○○院」→「○○」でも再試行）
                     if clinic and clinic in twe_to_fullname:
                         clinic = twe_to_fullname[clinic]
+                    elif clinic and clinic.endswith('院') and clinic[:-1] in twe_to_fullname:
+                        clinic = twe_to_fullname[clinic[:-1]]
 
                     if kubun == "退職":
                         if doctor in doctor_clinic:
@@ -340,6 +343,21 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                             if state.get(old_clinic) == doctor:
                                 state[old_clinic] = ""
                     elif is_dir and clinic:
+                        # 昇格・新任（前月に院長職なし）の場合は昇格イベントとして記録
+                        if doctor not in doctor_clinic:
+                            from_place = str(row.get("異動前/現所属", "") or "").strip()
+                            if from_place and from_place not in ("nan", ""):
+                                # 前の所属も TWE変換を試みる
+                                if from_place in twe_to_fullname:
+                                    from_place = twe_to_fullname[from_place]
+                                elif from_place.endswith('院') and from_place[:-1] in twe_to_fullname:
+                                    from_place = twe_to_fullname[from_place[:-1]]
+                            else:
+                                from_place = "（新任）"
+                            promotion_events.setdefault(month_key, []).append({
+                                "doctor": doctor, "from": from_place, "to": clinic,
+                                "kubun": kubun
+                            })
                         if doctor in doctor_clinic:
                             old_clinic = doctor_clinic[doctor]
                             if state.get(old_clinic) == doctor:
@@ -362,13 +380,13 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
 
         monthly_states[month_key] = snapshot
 
-    return monthly_states, months
+    return monthly_states, months, promotion_events
 
 def build_director_html(doctor_df, clinic_df, brand_cols):
     """院長履歴ピボットテーブルHTMLを生成"""
     past_data, past_current_info = load_past_director_data()
 
-    monthly_states, months = build_director_pivot(doctor_df, clinic_df, past_data)
+    monthly_states, months, _ = build_director_pivot(doctor_df, clinic_df, past_data)
     if not months:
         return '<p style="color:#999">データがありません</p>'
 
@@ -1512,12 +1530,13 @@ def generate():
 
     # ── 先生の異動データ ──
     past_data_mv, _ = load_past_director_data()
-    monthly_states_mv, months_mv = build_director_pivot(doctor_df, df, past_data_mv)
+    monthly_states_mv, months_mv, promotion_events = build_director_pivot(doctor_df, df, past_data_mv)
     doctor_stints, all_clinics_list, _ = build_doctor_movement_data(monthly_states_mv, months_mv)
-    doctor_stints_json = json.dumps(doctor_stints, ensure_ascii=False).replace("'", "\\'")
-    all_doctors_json   = json.dumps(sorted(doctor_stints.keys()), ensure_ascii=False)
-    all_clinics_json   = json.dumps(all_clinics_list, ensure_ascii=False)
-    months_mv_json     = json.dumps(months_mv, ensure_ascii=False)
+    doctor_stints_json     = json.dumps(doctor_stints, ensure_ascii=False).replace("'", "\\'")
+    all_doctors_json       = json.dumps(sorted(doctor_stints.keys()), ensure_ascii=False)
+    all_clinics_json       = json.dumps(all_clinics_list, ensure_ascii=False)
+    months_mv_json         = json.dumps(months_mv, ensure_ascii=False)
+    promotion_events_json  = json.dumps(promotion_events, ensure_ascii=False).replace("'", "\\'")
 
     # ── 開院・閉院・業態転換履歴 ──
     print("開院・閉院・業態転換履歴を集計中...")
@@ -1809,6 +1828,7 @@ const DOCTOR_STINTS = JSON.parse('{doctor_stints_json}');
 const ALL_DOCTORS   = {all_doctors_json};
 const ALL_CLINICS   = {all_clinics_json};
 const MONTHS_LIST   = {months_mv_json};
+const PROMOTION_EVENTS = JSON.parse('{promotion_events_json}');
 const BRAND_LABELS = {brand_labels_json};
 const CLINIC_DATA = JSON.parse('{clinic_json_escaped}');
 const UNIQUE_BRANDS = {brands_json};
@@ -2028,12 +2048,17 @@ function mvDetectChains() {{
     inEdge [m.to]   = inEdge [m.to]   || []; inEdge [m.to].push(m);
   }});
 
+  // 昇格・新任データ（Python側で収集）
+  const promoThisMonth = PROMOTION_EVENTS[monthKey] || [];
+  const promoByClinic = {{}};  // to_clinic → promo info
+  promoThisMonth.forEach(p => {{ promoByClinic[p.to] = p; }});
+
   // チェーン抽出：入ってくる異動がない院を起点に連鎖を追う
   const chains = [];
   const used = new Set();
   moves.forEach(startMove => {{
     if (used.has(startMove.doctor)) return;
-    // 起点：from側に「誰かが入ってくる」異動がない
+    // 起点：from側に「誰かが入ってくる」通常異動がない
     if (inEdge[startMove.from] && inEdge[startMove.from].length > 0) return;
 
     const chain = [startMove];
@@ -2050,6 +2075,14 @@ function mvDetectChains() {{
       cur = next.to;
       safety++;
     }}
+
+    // 起点の院に「昇格・新任」で入ってくる先生がいれば先頭に追加
+    const startClinic = chain[0].from;
+    if (promoByClinic[startClinic]) {{
+      const promo = promoByClinic[startClinic];
+      chain.unshift({{ doctor: promo.doctor, from: promo.from, to: startClinic, isPromotion: true }});
+    }}
+
     if (chain.length >= 2) chains.push(chain);
   }});
 
@@ -2069,14 +2102,22 @@ function mvDetectChains() {{
       html += `<div style="background:#FFF9C4;border:2px solid #B7950B;border-radius:10px;padding:14px 16px;margin-bottom:14px">`;
       html += `<div style="font-weight:bold;color:#6E2F00;margin-bottom:10px;font-size:13px">🔀 玉突き #${{i+1}}（${{chain.length}}連鎖）</div>`;
       html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">`;
-      // 起点の院（誰もいなくなった）
-      html += `<div style="background:#ECF0F1;border:2px solid #BDC3C7;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#555">
-        ${{chain[0].from}}<br><span style="font-size:10px;color:#999">（空きが生じる）</span>
-      </div>`;
+      // 起点表示（昇格・新任 or 空きが生じる院）
+      const firstMove = chain[0];
+      if (firstMove.isPromotion) {{
+        html += `<div style="background:#D5F5E3;border:2px solid #27AE60;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#1E8449">
+          ${{firstMove.from}}<br><span style="font-size:10px;color:#27AE60">（昇格元）</span>
+        </div>`;
+      }} else {{
+        html += `<div style="background:#ECF0F1;border:2px solid #BDC3C7;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#555">
+          ${{firstMove.from}}<br><span style="font-size:10px;color:#999">（空きが生じる）</span>
+        </div>`;
+      }}
       chain.forEach(move => {{
         html += `<div style="font-size:20px;color:#B7950B;font-weight:bold">→</div>`;
+        const doctorBg = move.isPromotion ? '#27AE60' : '#2C3E50';
         html += `<div style="text-align:center">
-          <div style="background:#2C3E50;color:white;border-radius:12px;padding:2px 10px;font-size:11px;white-space:nowrap;margin-bottom:3px">${{move.doctor}}</div>
+          <div style="background:${{doctorBg}};color:white;border-radius:12px;padding:2px 10px;font-size:11px;white-space:nowrap;margin-bottom:3px">${{move.doctor}}${{move.isPromotion?' ⬆':''}}</div>
           <div style="background:${{getClinicColor(move.to)}};color:white;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:bold;white-space:nowrap">${{move.to}}</div>
         </div>`;
       }});
