@@ -311,7 +311,8 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
     monthly_states = {}
     state = {}  # {clinic_name: doctor_name} for recent data
     doctor_clinic = {}  # {doctor: clinic} for recent data
-    promotion_events = {}  # {month_key: [{doctor, from, to, kubun}]}
+    promotion_events  = {}  # {month_key: [{doctor, from, to, kubun}]}
+    resignation_events = {}  # {month_key: [{doctor, clinic}]}
 
     for month_key in months:
         yr, mo = int(month_key[:4]), int(month_key[5:])
@@ -345,6 +346,24 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                             clinic = twe_to_clinics[_ck][0][0]  # 院ID最小（SBC湘南美容）を使用
 
                     if kubun == "退職":
+                        # 退職クリニックを特定して記録（玉突き起点として使用）
+                        resign_clinic = None
+                        resign_raw = str(row.get("異動前/現所属", "") or "").strip()
+                        if resign_raw and resign_raw not in ("nan", ""):
+                            rc_key = resign_raw if resign_raw in twe_to_clinics else \
+                                     (resign_raw[:-1] if resign_raw.endswith('院') else resign_raw)
+                            resign_clinic = twe_to_clinics[rc_key][0][0] if rc_key in twe_to_clinics else resign_raw
+                        if not resign_clinic and doctor in doctor_clinic:
+                            resign_clinic = doctor_clinic[doctor]
+                        if not resign_clinic:
+                            for cl, dr in state.items():
+                                if dr == doctor:
+                                    resign_clinic = cl
+                                    break
+                        if resign_clinic:
+                            resignation_events.setdefault(month_key, []).append(
+                                {"doctor": doctor, "clinic": resign_clinic})
+                        # 既存処理
                         if doctor in doctor_clinic:
                             old_clinic = doctor_clinic.pop(doctor)
                             if state.get(old_clinic) == doctor:
@@ -399,13 +418,13 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
 
         monthly_states[month_key] = snapshot
 
-    return monthly_states, months, promotion_events
+    return monthly_states, months, promotion_events, resignation_events
 
 def build_director_html(doctor_df, clinic_df, brand_cols):
     """院長履歴ピボットテーブルHTMLを生成"""
     past_data, past_current_info = load_past_director_data()
 
-    monthly_states, months, _ = build_director_pivot(doctor_df, clinic_df, past_data)
+    monthly_states, months, _, __ = build_director_pivot(doctor_df, clinic_df, past_data)
     if not months:
         return '<p style="color:#999">データがありません</p>'
 
@@ -1549,13 +1568,14 @@ def generate():
 
     # ── 先生の異動データ ──
     past_data_mv, _ = load_past_director_data()
-    monthly_states_mv, months_mv, promotion_events = build_director_pivot(doctor_df, df, past_data_mv)
+    monthly_states_mv, months_mv, promotion_events, resignation_events = build_director_pivot(doctor_df, df, past_data_mv)
     doctor_stints, all_clinics_list, _ = build_doctor_movement_data(monthly_states_mv, months_mv)
     doctor_stints_json     = json.dumps(doctor_stints, ensure_ascii=False).replace("'", "\\'")
     all_doctors_json       = json.dumps(sorted(doctor_stints.keys()), ensure_ascii=False)
     all_clinics_json       = json.dumps(all_clinics_list, ensure_ascii=False)
     months_mv_json         = json.dumps(months_mv, ensure_ascii=False)
-    promotion_events_json  = json.dumps(promotion_events, ensure_ascii=False).replace("'", "\\'")
+    promotion_events_json   = json.dumps(promotion_events,  ensure_ascii=False).replace("'", "\\'")
+    resignation_events_json = json.dumps(resignation_events, ensure_ascii=False).replace("'", "\\'")
 
     # ── 開院・閉院・業態転換履歴 ──
     print("開院・閉院・業態転換履歴を集計中...")
@@ -1847,7 +1867,8 @@ const DOCTOR_STINTS = JSON.parse('{doctor_stints_json}');
 const ALL_DOCTORS   = {all_doctors_json};
 const ALL_CLINICS   = {all_clinics_json};
 const MONTHS_LIST   = {months_mv_json};
-const PROMOTION_EVENTS = JSON.parse('{promotion_events_json}');
+const PROMOTION_EVENTS   = JSON.parse('{promotion_events_json}');
+const RESIGNATION_EVENTS = JSON.parse('{resignation_events_json}');
 const BRAND_LABELS = {brand_labels_json};
 const CLINIC_DATA = JSON.parse('{clinic_json_escaped}');
 const UNIQUE_BRANDS = {brands_json};
@@ -2072,38 +2093,73 @@ function mvDetectChains() {{
   const promoByClinic = {{}};  // to_clinic → promo info
   promoThisMonth.forEach(p => {{ promoByClinic[p.to] = p; }});
 
-  // チェーン抽出：入ってくる異動がない院を起点に連鎖を追う
-  const chains = [];
+  // ── チェーン抽出 ──
+  // 退職データがあれば退職起点、なければグラフ起点にフォールバック
+  const resignations = RESIGNATION_EVENTS[monthKey] || [];
+  const chains = [];  // 構造: resign + chainの配列
   const used = new Set();
-  moves.forEach(startMove => {{
-    if (used.has(startMove.doctor)) return;
-    // 起点：from側に「誰かが入ってくる」通常異動がない
-    if (inEdge[startMove.from] && inEdge[startMove.from].length > 0) return;
 
-    const chain = [startMove];
-    used.add(startMove.doctor);
-    let cur = startMove.to;
-    let safety = 0;
+  if (resignations.length > 0) {{
+    // 【退職起点】退職で空いた院を起点にinEdgeを逆引きしてチェーン構築
+    resignations.forEach(resign => {{
+      const vacantClinic = resign.clinic;
+      // 退職院に誰かが入ってきたか確認
+      const firstFillers = (inEdge[vacantClinic] || []).filter(m => !used.has(m.doctor));
+      if (!firstFillers.length) return;
 
-    while (cur && safety < 20) {{
-      const nexts = (outEdge[cur] || []).filter(m => !used.has(m.doctor));
-      if (!nexts.length) break;
-      const next = nexts[0];
-      chain.push(next);
-      used.add(next.doctor);
-      cur = next.to;
-      safety++;
-    }}
+      const chain = [];
+      let cur = vacantClinic;
+      const visited = new Set();
 
-    // 起点の院に「昇格・新任」で入ってくる先生がいれば先頭に追加
-    const startClinic = chain[0].from;
-    if (promoByClinic[startClinic]) {{
-      const promo = promoByClinic[startClinic];
-      chain.unshift({{ doctor: promo.doctor, from: promo.from, to: startClinic, isPromotion: true }});
-    }}
+      while (cur && !visited.has(cur)) {{
+        visited.add(cur);
+        const movesIn = (inEdge[cur] || []).filter(m => !used.has(m.doctor));
+        if (movesIn.length) {{
+          const move = movesIn[0];
+          chain.push(move);
+          used.add(move.doctor);
+          cur = move.from;  // この先生の出身院を次のループで調べる
+        }} else {{
+          // 通常異動なし → 昇格・新任か確認
+          const promo = promoByClinic[cur];
+          if (promo && !used.has(promo.doctor)) {{
+            chain.push({{ doctor: promo.doctor, from: promo.from, to: cur, isPromotion: true }});
+            used.add(promo.doctor);
+          }}
+          break;
+        }}
+      }}
 
-    if (chain.length >= 2) chains.push(chain);
-  }});
+      if (chain.length >= 1) chains.push({{ resign, chain }});
+    }});
+  }} else {{
+    // 【グラフ起点フォールバック】前月から入がない院を起点に従来方式で検出
+    moves.forEach(startMove => {{
+      if (used.has(startMove.doctor)) return;
+      if (inEdge[startMove.from] && inEdge[startMove.from].length > 0) return;
+
+      const chain = [startMove];
+      used.add(startMove.doctor);
+      let cur = startMove.to;
+      let safety = 0;
+      while (cur && safety < 20) {{
+        const nexts = (outEdge[cur] || []).filter(m => !used.has(m.doctor));
+        if (!nexts.length) break;
+        const next = nexts[0];
+        chain.push(next);
+        used.add(next.doctor);
+        cur = next.to;
+        safety++;
+      }}
+      // 昇格を先頭に追加
+      const startClinic = chain[0].from;
+      if (promoByClinic[startClinic]) {{
+        const promo = promoByClinic[startClinic];
+        chain.unshift({{ doctor: promo.doctor, from: promo.from, to: startClinic, isPromotion: true }});
+      }}
+      if (chain.length >= 2) chains.push({{ resign: null, chain }});
+    }});
+  }}
 
   // ── 結果表示 ──
   let html = '';
@@ -2117,35 +2173,65 @@ function mvDetectChains() {{
     html += `<div style="padding:10px 16px;background:#FDFEFE;border:1px solid #B7950B;border-radius:8px;margin-bottom:16px">
       <b style="color:#7D6608;font-size:14px">🔀 ${{monthKey}} に検出された玉突き人事：${{chains.length}}件</b>
     </div>`;
-    chains.forEach((chain, i) => {{
+    chains.forEach((chainObj, i) => {{
+      const {{resign, chain}} = chainObj;
+      const totalLen = chain.length + (resign ? 1 : 0);
       html += `<div style="background:#FFF9C4;border:2px solid #B7950B;border-radius:10px;padding:14px 16px;margin-bottom:14px">`;
-      html += `<div style="font-weight:bold;color:#6E2F00;margin-bottom:10px;font-size:13px">🔀 玉突き #${{i+1}}（${{chain.length}}連鎖）</div>`;
-      html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">`;
-      // 起点表示（昇格・新任 or 空きが生じる院）
-      const firstMove = chain[0];
-      if (firstMove.isPromotion) {{
-        html += `<div style="background:#D5F5E3;border:2px solid #27AE60;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#1E8449">
-          ${{firstMove.from}}<br><span style="font-size:10px;color:#27AE60">（昇格元）</span>
+      html += `<div style="font-weight:bold;color:#6E2F00;margin-bottom:10px;font-size:13px">
+        🔀 玉突き #${{i+1}}（${{totalLen}}連鎖）${{resign ? `<span style="color:#C0392B;margin-left:8px">起点：${{resign.doctor}}退職</span>` : ''}}
+      </div>`;
+      html += `<div style="display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px">`;
+
+      // 【退職起点の場合】退職ブロックを左端に表示
+      if (resign) {{
+        html += `<div style="background:#FDEDEC;border:2px solid #C0392B;border-radius:8px;padding:8px 12px;text-align:center;min-width:110px">
+          <div style="font-size:10px;font-weight:bold;color:#C0392B;margin-bottom:4px">🚪 退職（起点）</div>
+          <div style="font-size:13px;font-weight:bold;color:#2C3E50">${{resign.doctor}}</div>
+          <div style="font-size:10px;color:#888;margin-top:2px">${{resign.clinic}}</div>
         </div>`;
+        // チェーン各ノード（退職院←新院長←出身院 の順）
+        chain.forEach(move => {{
+          html += `<div style="font-size:18px;color:#C0392B;font-weight:bold;align-self:center">→</div>`;
+          const doctorBg = move.isPromotion ? '#27AE60' : '#2C3E50';
+          const fromLabel = move.isPromotion
+            ? `<span style="color:#27AE60;font-size:10px">⬆ 昇格就任</span>`
+            : `<span style="font-size:10px;color:#888">${{move.from}}より</span>`;
+          html += `<div style="text-align:center;min-width:110px">
+            <div style="background:${{getClinicColor(move.to)}};color:white;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:bold">${{move.to}}</div>
+            <div style="margin-top:4px;display:flex;flex-direction:column;align-items:center;gap:2px">
+              <div style="background:${{doctorBg}};color:white;border-radius:10px;padding:2px 10px;font-size:11px">${{move.doctor}}</div>
+              <div>${{fromLabel}}</div>
+            </div>
+          </div>`;
+        }});
       }} else {{
-        html += `<div style="background:#ECF0F1;border:2px solid #BDC3C7;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#555">
-          ${{firstMove.from}}<br><span style="font-size:10px;color:#999">（空きが生じる）</span>
-        </div>`;
-      }}
-      chain.forEach(move => {{
-        html += `<div style="font-size:20px;color:#B7950B;font-weight:bold">→</div>`;
-        const doctorBg = move.isPromotion ? '#27AE60' : '#2C3E50';
-        html += `<div style="text-align:center">
-          <div style="background:${{doctorBg}};color:white;border-radius:12px;padding:2px 10px;font-size:11px;white-space:nowrap;margin-bottom:3px">${{move.doctor}}${{move.isPromotion?' ⬆':''}}</div>
-          <div style="background:${{getClinicColor(move.to)}};color:white;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:bold;white-space:nowrap">${{move.to}}</div>
-        </div>`;
-      }});
+        // 【グラフ起点フォールバック】従来の表示（昇格元 → ... → 空席）
+        const firstMove = chain[0];
+        if (firstMove.isPromotion) {{
+          html += `<div style="background:#D5F5E3;border:2px solid #27AE60;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#1E8449;text-align:center">
+            ${{firstMove.from}}<br><span style="font-size:10px;color:#27AE60">（昇格元）</span>
+          </div>`;
+        }} else {{
+          html += `<div style="background:#ECF0F1;border:2px solid #BDC3C7;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#555;text-align:center">
+            ${{firstMove.from}}<br><span style="font-size:10px;color:#999">（空きが生じる）</span>
+          </div>`;
+        }}
+        chain.forEach(move => {{
+          html += `<div style="font-size:20px;color:#B7950B;font-weight:bold;align-self:center">→</div>`;
+          const doctorBg = move.isPromotion ? '#27AE60' : '#2C3E50';
+          html += `<div style="text-align:center">
+            <div style="background:${{doctorBg}};color:white;border-radius:12px;padding:2px 10px;font-size:11px;white-space:nowrap;margin-bottom:3px">${{move.doctor}}${{move.isPromotion?' ⬆':''}}</div>
+            <div style="background:${{getClinicColor(move.to)}};color:white;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:bold;white-space:nowrap">${{move.to}}</div>
+          </div>`;
+        }});
+      }}  // end else (fallback)
       html += `</div></div>`;
     }});
   }}
 
   // すべての異動一覧
-  const chainDoctors = new Set(chains.flatMap(ch => ch.map(m=>m.doctor)));
+  const chainDoctors = new Set(chains.flatMap(obj => obj.chain.map(m => m.doctor)));
+  chains.forEach(obj => {{ if (obj.resign) chainDoctors.add(obj.resign.doctor); }});
   const otherMoves = moves.filter(m => !chainDoctors.has(m.doctor));
   html += `<div style="margin-top:16px">`;
   html += `<b style="font-size:13px">${{monthKey}} の全異動一覧（${{moves.length}}件）</b>`;
