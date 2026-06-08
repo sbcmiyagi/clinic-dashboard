@@ -420,16 +420,10 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
 
     # ── 院長履歴スナップショット比較による退職・昇格の自動補完 ──
     # 人事通達データのない月（2025/08以前）や未記入の退職を補う
-    # 「過去に一度でも院長実績がある先生」を蓄積 → 異動と昇格を区別するため
-    ever_director = set()
+    RECENT_WINDOW = 3  # 直近N ヶ月以内に院長実績があれば「院長間異動」と判定
 
     for i, month_key in enumerate(months):
-        if i == 0:
-            # 最初の月の院長を全員 ever_director に登録
-            for doctor in monthly_states.get(month_key, {}).values():
-                if doctor and doctor not in ('-', '', 'nan'):
-                    ever_director.add(doctor)
-            continue
+        if i == 0: continue
 
         prev_month = months[i - 1]
         prev_state = monthly_states.get(prev_month, {})
@@ -443,27 +437,29 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
         for doctor in set(prev_dr) - set(cur_dr):
             old_clinic = prev_dr[doctor]
             new_doctor = cur_state.get(old_clinic, "")
-            # そのクリニックに新しい院長が就任している場合のみ記録（空席のままは除外）
             if new_doctor and new_doctor != doctor:
                 if not any(e["doctor"] == doctor
                            for e in resignation_events.get(month_key, [])):
                     resignation_events.setdefault(month_key, []).append(
                         {"doctor": doctor, "clinic": old_clinic})
 
-        # 今月初めて院長になった人 かつ 過去に院長実績がない人 → 昇格と判定
-        # （過去に院長実績あり = 院長間の異動のため除外：東先生のような四日市→静岡ケース）
+        # 今月新たに院長になった人を判定
         for doctor in set(cur_dr) - set(prev_dr):
             new_clinic = cur_dr[doctor]
-            if doctor in ever_director:
-                continue  # 既に院長実績あり → 昇格ではなく院長間異動
+            # 直近 RECENT_WINDOW ヶ月以内に院長実績があるか確認
+            # → あれば「院長間異動」（例：東先生の四日市→静岡）
+            # → なければ「昇格」（例：佐藤先生の秋田→4ヶ月空白→川口）
+            was_recent_director = any(
+                doctor in {d for d in monthly_states.get(months[j], {}).values()
+                           if d and d not in ('-', '', 'nan')}
+                for j in range(max(0, i - RECENT_WINDOW), i)
+            )
+            if was_recent_director:
+                continue  # 直近に院長実績あり → 院長間異動なので除外
             if not any(e["doctor"] == doctor
                        for e in promotion_events.get(month_key, [])):
                 promotion_events.setdefault(month_key, []).append(
                     {"doctor": doctor, "from": "（昇格）", "to": new_clinic, "kubun": "昇格"})
-
-        # 今月の院長を全員 ever_director に追加（翌月以降の判定に使用）
-        for doctor in cur_dr:
-            ever_director.add(doctor)
 
     return monthly_states, months, promotion_events, resignation_events
 
