@@ -420,8 +420,17 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
 
     # ── 院長履歴スナップショット比較による退職・昇格の自動補完 ──
     # 人事通達データのない月（2025/08以前）や未記入の退職を補う
+    # 「過去に一度でも院長実績がある先生」を蓄積 → 異動と昇格を区別するため
+    ever_director = set()
+
     for i, month_key in enumerate(months):
-        if i == 0: continue
+        if i == 0:
+            # 最初の月の院長を全員 ever_director に登録
+            for doctor in monthly_states.get(month_key, {}).values():
+                if doctor and doctor not in ('-', '', 'nan'):
+                    ever_director.add(doctor)
+            continue
+
         prev_month = months[i - 1]
         prev_state = monthly_states.get(prev_month, {})
         cur_state  = monthly_states.get(month_key,  {})
@@ -441,13 +450,20 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                     resignation_events.setdefault(month_key, []).append(
                         {"doctor": doctor, "clinic": old_clinic})
 
-        # 今月初めて院長になった人（前月は院長ではなかった）→ 昇格と判定
+        # 今月初めて院長になった人 かつ 過去に院長実績がない人 → 昇格と判定
+        # （過去に院長実績あり = 院長間の異動のため除外：東先生のような四日市→静岡ケース）
         for doctor in set(cur_dr) - set(prev_dr):
             new_clinic = cur_dr[doctor]
+            if doctor in ever_director:
+                continue  # 既に院長実績あり → 昇格ではなく院長間異動
             if not any(e["doctor"] == doctor
                        for e in promotion_events.get(month_key, [])):
                 promotion_events.setdefault(month_key, []).append(
                     {"doctor": doctor, "from": "（昇格）", "to": new_clinic, "kubun": "昇格"})
+
+        # 今月の院長を全員 ever_director に追加（翌月以降の判定に使用）
+        for doctor in cur_dr:
+            ever_director.add(doctor)
 
     return monthly_states, months, promotion_events, resignation_events
 
@@ -2151,11 +2167,17 @@ function mvDetectChains() {{
           used.add(move.doctor);
           cur = move.from;  // この先生の出身院を次のループで調べる
         }} else {{
-          // 通常異動なし → 昇格・新任か確認
+          // 通常異動なし → 昇格・院長間異動か確認
           const promo = promoByClinic[cur];
           if (promo && !used.has(promo.doctor)) {{
-            chain.push({{ doctor: promo.doctor, from: promo.from, to: cur, isPromotion: true }});
+            const isPromo = (promo.kubun === '昇格');
+            chain.push({{ doctor: promo.doctor, from: promo.from, to: cur, isPromotion: isPromo }});
             used.add(promo.doctor);
+            // 院長間異動（kubun≠昇格）かつ出身院が判明している場合はさらに連鎖を追う
+            if (!isPromo && promo.from && !promo.from.startsWith('（')) {{
+              cur = promo.from;
+              continue;
+            }}
           }}
           break;
         }}
