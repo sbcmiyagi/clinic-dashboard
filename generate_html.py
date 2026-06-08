@@ -1724,10 +1724,14 @@ def generate():
     <div class="section-title">先生の異動履歴</div>
 
     <!-- ビュー切り替え -->
-    <div style="margin-bottom:12px;display:flex;gap:8px">
+    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button id="mvBtnA" onclick="mvSwitch('A')"
         style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#B7950B;color:white;font-weight:bold">
         A：先生タイムライン
+      </button>
+      <button id="mvBtnB" onclick="mvSwitch('B')"
+        style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
+        B：玉突き人事検出
       </button>
       <button id="mvBtnC" onclick="mvSwitch('C')"
         style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
@@ -1735,22 +1739,51 @@ def generate():
       </button>
     </div>
 
-    <!-- Case A: 先生タイムライン -->
+    <!-- Case A: 先生タイムライン（複数選択対応） -->
     <div id="mvViewA">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-        <span style="font-size:13px">先生を選択：</span>
-        <input id="mvDoctorInput" type="text" placeholder="名前を入力して検索..."
-          style="padding:5px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;min-width:200px"
-          oninput="mvFilterDoctors()">
-        <select id="mvDoctorSelect" size="1"
-          style="padding:5px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;min-width:200px"
-          onchange="mvDrawGantt()">
-          <option value="">（先生を選んでください）</option>
-        </select>
-        <button onclick="mvDrawGantt()"
-          style="padding:5px 14px;background:#2980B9;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">表示</button>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+        <!-- 左：先生選択パネル -->
+        <div style="flex:0 0 240px">
+          <div style="font-size:13px;font-weight:bold;margin-bottom:6px">先生を選択（複数可）</div>
+          <input id="mvDoctorInput" type="text" placeholder="名前で絞り込み..."
+            style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;box-sizing:border-box;margin-bottom:4px"
+            oninput="mvFilterDoctors()">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:12px">
+            <button onclick="mvSelectAll(true)"
+              style="padding:2px 8px;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:11px;background:#f0f0f0">全選択</button>
+            <button onclick="mvSelectAll(false)"
+              style="padding:2px 8px;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:11px;background:#f0f0f0">全解除</button>
+            <span id="mvSelectedCount" style="color:#B7950B;font-weight:bold">0名選択中</span>
+          </div>
+          <div id="mvDoctorList"
+            style="height:300px;overflow-y:auto;border:1px solid #ccc;border-radius:4px;padding:4px;background:white">
+          </div>
+        </div>
+        <!-- 右：ガントチャート -->
+        <div style="flex:1;min-width:0">
+          <button onclick="mvDrawGantt()"
+            style="margin-bottom:10px;padding:6px 18px;background:#B7950B;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+            📊 ガントチャートを表示
+          </button>
+          <div id="mvGanttArea" style="overflow-x:auto"></div>
+        </div>
       </div>
-      <div id="mvGanttArea" style="overflow-x:auto"></div>
+    </div>
+
+    <!-- Case B: 玉突き人事検出 -->
+    <div id="mvViewB" style="display:none">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <span style="font-size:13px">月を選択：</span>
+        <select id="mvChainMonth"
+          style="padding:5px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px">
+        </select>
+        <button onclick="mvDetectChains()"
+          style="padding:5px 16px;background:#E74C3C;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+          🔀 玉突き検出
+        </button>
+        <span style="font-size:12px;color:#888">先生Aが院Xから院Yへ→同月に先生Bが院Xへ着任、の連鎖を検出します</span>
+      </div>
+      <div id="mvChainArea"></div>
     </div>
 
     <!-- Case C: 月次配属マップ -->
@@ -1794,7 +1827,7 @@ function showTab(id, el) {{
 }}
 
 // ── 先生の異動履歴 ──────────────────────────────
-// クリニック別カラー（最大30色）
+// クリニック別カラー（最大20色）
 const CLINIC_COLORS = [
   '#2980B9','#27AE60','#E67E22','#8E44AD','#E74C3C',
   '#16A085','#D35400','#2C3E50','#F39C12','#1ABC9C',
@@ -1811,95 +1844,277 @@ function getClinicColor(clinic) {{
 }}
 
 function mvSwitch(mode) {{
-  document.getElementById('mvViewA').style.display = mode==='A' ? '' : 'none';
-  document.getElementById('mvViewC').style.display = mode==='C' ? '' : 'none';
-  document.getElementById('mvBtnA').style.background = mode==='A' ? '#B7950B' : '#ddd';
-  document.getElementById('mvBtnA').style.color      = mode==='A' ? 'white' : '#333';
-  document.getElementById('mvBtnC').style.background = mode==='C' ? '#B7950B' : '#ddd';
-  document.getElementById('mvBtnC').style.color      = mode==='C' ? 'white' : '#333';
+  ['A','B','C'].forEach(m => {{
+    document.getElementById('mvView'+m).style.display = mode===m ? '' : 'none';
+    const btn = document.getElementById('mvBtn'+m);
+    btn.style.background = mode===m ? '#B7950B' : '#ddd';
+    btn.style.color      = mode===m ? 'white'   : '#333';
+    btn.style.fontWeight = mode===m ? 'bold'     : 'normal';
+  }});
   if (mode==='C') mvDrawMonthMap();
 }}
 
-// Case A: 先生タイムライン
+// ── 初期化 ──
 (function initMvDoctors() {{
-  const sel = document.getElementById('mvDoctorSelect');
+  // Case A: チェックボックスリスト
+  const listDiv = document.getElementById('mvDoctorList');
   ALL_DOCTORS.forEach(d => {{
-    const opt = document.createElement('option');
-    opt.value = d; opt.textContent = d;
-    sel.appendChild(opt);
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex;align-items:center;gap:5px;padding:3px 5px;cursor:pointer;font-size:13px;border-radius:3px';
+    label.onmouseover = ()=>label.style.background='#f0f4f8';
+    label.onmouseout  = ()=>label.style.background='';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = d;
+    cb.onchange = updateMvSelectedCount;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(d));
+    listDiv.appendChild(label);
   }});
-  const mvSel = document.getElementById('mvMonthSelect');
-  MONTHS_LIST.slice().reverse().forEach(mk => {{
-    const opt = document.createElement('option');
-    opt.value = mk; opt.textContent = mk;
-    mvSel.appendChild(opt);
+
+  // Case B / C: 月セレクター（新しい月順）
+  ['mvChainMonth','mvMonthSelect'].forEach(id => {{
+    const sel = document.getElementById(id);
+    MONTHS_LIST.slice().reverse().forEach(mk => {{
+      const opt = document.createElement('option');
+      opt.value = mk; opt.textContent = mk;
+      sel.appendChild(opt);
+    }});
   }});
+  // Case C: onchange
+  document.getElementById('mvMonthSelect').onchange = mvDrawMonthMap;
 }})();
 
+// Case A: 絞り込み・全選択
 function mvFilterDoctors() {{
   const q = document.getElementById('mvDoctorInput').value.toLowerCase();
-  const sel = document.getElementById('mvDoctorSelect');
-  sel.innerHTML = '<option value="">（先生を選んでください）</option>';
-  ALL_DOCTORS.filter(d => d.toLowerCase().includes(q)).forEach(d => {{
-    const opt = document.createElement('option');
-    opt.value = d; opt.textContent = d;
-    sel.appendChild(opt);
+  document.querySelectorAll('#mvDoctorList label').forEach(label => {{
+    const name = label.textContent.toLowerCase();
+    label.style.display = (!q || name.includes(q)) ? '' : 'none';
   }});
 }}
+function mvSelectAll(checked) {{
+  document.querySelectorAll('#mvDoctorList label').forEach(label => {{
+    if (label.style.display !== 'none') {{
+      label.querySelector('input').checked = checked;
+    }}
+  }});
+  updateMvSelectedCount();
+}}
+function updateMvSelectedCount() {{
+  const n = document.querySelectorAll('#mvDoctorList input:checked').length;
+  document.getElementById('mvSelectedCount').textContent = n + '名選択中';
+}}
 
+// Case A: ガントチャート（複数先生対応）
 function mvDrawGantt() {{
-  const doctor = document.getElementById('mvDoctorSelect').value;
+  const selected = [...document.querySelectorAll('#mvDoctorList input:checked')].map(cb=>cb.value);
   const area = document.getElementById('mvGanttArea');
-  if (!doctor || !DOCTOR_STINTS[doctor]) {{
-    area.innerHTML = '<p style="color:#999;font-size:13px">先生を選択してください</p>';
+  if (!selected.length) {{
+    area.innerHTML = '<p style="color:#999;font-size:13px">先生をチェックして「表示」を押してください</p>';
     return;
   }}
-  const stints = DOCTOR_STINTS[doctor];
+
   const allMonths = MONTHS_LIST;
-  const minM = allMonths[0], maxM = allMonths[allMonths.length-1];
   const totalCols = allMonths.length;
 
-  let html = `<h4 style="margin:0 0 8px">${{doctor}} の院長歴</h4>`;
-  html += '<div style="position:relative;overflow-x:auto">';
-  // ヘッダー（年だけ表示）
-  html += '<div style="display:flex;border-bottom:2px solid #ddd;margin-bottom:4px;min-width:' + (totalCols*40) + 'px">';
-  let prevYear = '';
+  // ヘッダー行（年/月）
+  let headerRow = '<tr>';
+  headerRow += '<th style="min-width:140px;max-width:160px;padding:4px 8px;border:1px solid #ccc;background:#2C3E50;color:white;position:sticky;left:0;z-index:3;font-size:12px;text-align:left">先生名</th>';
   allMonths.forEach(mk => {{
     const yr = mk.split('/')[0];
     const mo = mk.split('/')[1];
-    const isJan = mo === '01';
+    const isJan = mo==='01';
     const bg = isJan ? '#2C3E50' : '#ECF0F1';
-    const color = isJan ? 'white' : '#666';
-    html += `<div style="width:40px;min-width:40px;font-size:9px;text-align:center;background:${{bg}};color:${{color}};padding:2px 0;border-right:1px solid #ddd">` + (isJan ? yr : mo) + '</div>';
+    const col = isJan ? 'white' : '#555';
+    const label = isJan ? yr : mo;
+    headerRow += `<th style="min-width:36px;width:36px;padding:2px 0;text-align:center;font-size:9px;background:${{bg}};color:${{col}};border:1px solid #ccc">${{label}}</th>`;
   }});
-  html += '</div>';
+  headerRow += '</tr>';
 
-  // スティント行
-  stints.forEach(stint => {{
-    const startIdx = allMonths.indexOf(stint.start);
-    const endIdx   = allMonths.indexOf(stint.end);
-    if (startIdx < 0) return;
-    const spanCols = Math.max(1, endIdx - startIdx + 1);
-    const leftPx   = startIdx * 40;
-    const widthPx  = spanCols * 40;
-    const color     = getClinicColor(stint.clinic);
-    html += `<div style="position:relative;height:30px;min-width:${{totalCols*40}}px;margin-bottom:4px">`;
-    html += `<div style="position:absolute;left:${{leftPx}}px;width:${{widthPx}}px;height:28px;background:${{color}};border-radius:4px;display:flex;align-items:center;padding:0 6px;color:white;font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden;cursor:default" title="${{stint.clinic}} (${{stint.start}}〜${{stint.end}})">
-      ${{stint.clinic}} (${{stint.start}}〜${{stint.end}})
-    </div></div>`;
+  // 先生ごとの行
+  let bodyRows = '';
+  const allUsedClinics = new Set();
+  selected.forEach(doctor => {{
+    const stints = DOCTOR_STINTS[doctor] || [];
+    // 月→クリニック マップ
+    const mc = {{}};
+    stints.forEach(s => {{
+      allMonths.forEach(mk => {{
+        if (mk >= s.start && mk <= s.end) mc[mk] = s.clinic;
+      }});
+      allUsedClinics.add(s.clinic);
+    }});
+
+    bodyRows += '<tr>';
+    bodyRows += `<td style="padding:4px 8px;border:1px solid #ddd;font-weight:bold;font-size:12px;white-space:nowrap;background:white;position:sticky;left:0;z-index:1">${{doctor}}</td>`;
+    let prevClinic = null;
+    allMonths.forEach(mk => {{
+      const clinic = mc[mk] || null;
+      if (clinic) {{
+        const color = getClinicColor(clinic);
+        const borderLeft = (prevClinic && prevClinic !== clinic)
+          ? 'border-left:3px solid #E74C3C;'
+          : `border-left:1px solid ${{color}};`;
+        bodyRows += `<td style="background:${{color}};${{borderLeft}}border-top:1px solid ${{color}};border-right:1px solid ${{color}};border-bottom:1px solid ${{color}};min-width:36px;width:36px;padding:0" title="${{clinic}} (${{mk}})"></td>`;
+      }} else {{
+        bodyRows += `<td style="background:#f5f5f5;border:1px solid #e8e8e8;min-width:36px;width:36px;padding:0"></td>`;
+      }}
+      prevClinic = clinic;
+    }});
+    bodyRows += '</tr>';
   }});
 
-  html += '</div>';
+  let html = `<div style="overflow-x:auto;overflow-y:auto;max-height:70vh">
+    <table style="border-collapse:collapse;font-size:12px">
+    <thead>${{headerRow}}</thead>
+    <tbody>${{bodyRows}}</tbody>
+    </table></div>`;
 
   // 凡例
-  const uniqueClinics = [...new Set(stints.map(s => s.clinic))];
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;font-size:12px">';
-  uniqueClinics.forEach(c => {{
-    html += `<span style="background:${{getClinicColor(c)}};color:white;padding:2px 8px;border-radius:3px">${{c}}</span>`;
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;font-size:11px;align-items:center">';
+  html += '<span style="font-size:12px;color:#666">凡例：</span>';
+  allUsedClinics.forEach(c => {{
+    html += `<span style="background:${{getClinicColor(c)}};color:white;padding:2px 6px;border-radius:3px">${{c}}</span>`;
   }});
+  html += '<span style="margin-left:8px;font-size:11px;color:#E74C3C">│ 赤い左境界線 = 院の変更</span>';
   html += '</div>';
 
   area.innerHTML = html;
+}}
+
+// ── Case B: 玉突き人事検出 ──
+function mvDetectChains() {{
+  const monthKey = document.getElementById('mvChainMonth').value;
+  const area = document.getElementById('mvChainArea');
+  if (!monthKey) return;
+
+  const monthIdx = MONTHS_LIST.indexOf(monthKey);
+  const prevMonth = monthIdx > 0 ? MONTHS_LIST[monthIdx - 1] : null;
+  if (!prevMonth) {{
+    area.innerHTML = '<p style="color:#999;font-size:13px">最初の月は前月データがないため検出できません</p>';
+    return;
+  }}
+
+  // 今月・前月の配属マップ
+  const curMap = {{}}, prevMap = {{}};
+  Object.entries(DOCTOR_STINTS).forEach(([doc, stints]) => {{
+    stints.forEach(s => {{
+      if (s.start <= monthKey  && s.end >= monthKey)  curMap[doc]  = s.clinic;
+      if (s.start <= prevMonth && s.end >= prevMonth) prevMap[doc] = s.clinic;
+    }});
+  }});
+
+  // 異動リストを構築
+  const moves = [];
+  const allDocs = new Set([...Object.keys(curMap), ...Object.keys(prevMap)]);
+  allDocs.forEach(doc => {{
+    const from = prevMap[doc] || null;
+    const to   = curMap[doc]  || null;
+    if (from && to && from !== to) moves.push({{doctor:doc, from, to}});
+  }});
+
+  if (!moves.length) {{
+    area.innerHTML = `<div style="padding:16px;background:#D5F5E3;border-radius:8px;color:#1E8449">
+      <b>${{monthKey}} は院長の異動が検出されませんでした</b>
+    </div>`;
+    return;
+  }}
+
+  // グラフ構築：院 → [出ていった人の異動]
+  const outEdge = {{}};  // fromClinic → 異動リスト
+  const inEdge  = {{}};  // toClinic   → 異動リスト
+  moves.forEach(m => {{
+    outEdge[m.from] = outEdge[m.from] || []; outEdge[m.from].push(m);
+    inEdge [m.to]   = inEdge [m.to]   || []; inEdge [m.to].push(m);
+  }});
+
+  // チェーン抽出：入ってくる異動がない院を起点に連鎖を追う
+  const chains = [];
+  const used = new Set();
+  moves.forEach(startMove => {{
+    if (used.has(startMove.doctor)) return;
+    // 起点：from側に「誰かが入ってくる」異動がない
+    if (inEdge[startMove.from] && inEdge[startMove.from].length > 0) return;
+
+    const chain = [startMove];
+    used.add(startMove.doctor);
+    let cur = startMove.to;
+    let safety = 0;
+
+    while (cur && safety < 20) {{
+      const nexts = (outEdge[cur] || []).filter(m => !used.has(m.doctor));
+      if (!nexts.length) break;
+      const next = nexts[0];
+      chain.push(next);
+      used.add(next.doctor);
+      cur = next.to;
+      safety++;
+    }}
+    if (chain.length >= 2) chains.push(chain);
+  }});
+
+  // ── 結果表示 ──
+  let html = '';
+
+  if (!chains.length) {{
+    html += `<div style="padding:12px 16px;background:#FEF9E7;border:1px solid #F1C40F;border-radius:8px;margin-bottom:16px">
+      <b style="color:#7D6608">${{monthKey}}：玉突き人事は検出されませんでした</b>
+      <span style="font-size:12px;color:#888;margin-left:8px">（異動件数: ${{moves.length}}件）</span>
+    </div>`;
+  }} else {{
+    html += `<div style="padding:10px 16px;background:#FDFEFE;border:1px solid #B7950B;border-radius:8px;margin-bottom:16px">
+      <b style="color:#7D6608;font-size:14px">🔀 ${{monthKey}} に検出された玉突き人事：${{chains.length}}件</b>
+    </div>`;
+    chains.forEach((chain, i) => {{
+      html += `<div style="background:#FFF9C4;border:2px solid #B7950B;border-radius:10px;padding:14px 16px;margin-bottom:14px">`;
+      html += `<div style="font-weight:bold;color:#6E2F00;margin-bottom:10px;font-size:13px">🔀 玉突き #${{i+1}}（${{chain.length}}連鎖）</div>`;
+      html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">`;
+      // 起点の院（誰もいなくなった）
+      html += `<div style="background:#ECF0F1;border:2px solid #BDC3C7;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;color:#555">
+        ${{chain[0].from}}<br><span style="font-size:10px;color:#999">（空きが生じる）</span>
+      </div>`;
+      chain.forEach(move => {{
+        html += `<div style="font-size:20px;color:#B7950B;font-weight:bold">→</div>`;
+        html += `<div style="text-align:center">
+          <div style="background:#2C3E50;color:white;border-radius:12px;padding:2px 10px;font-size:11px;white-space:nowrap;margin-bottom:3px">${{move.doctor}}</div>
+          <div style="background:${{getClinicColor(move.to)}};color:white;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:bold;white-space:nowrap">${{move.to}}</div>
+        </div>`;
+      }});
+      html += `</div></div>`;
+    }});
+  }}
+
+  // すべての異動一覧
+  const chainDoctors = new Set(chains.flatMap(ch => ch.map(m=>m.doctor)));
+  const otherMoves = moves.filter(m => !chainDoctors.has(m.doctor));
+  html += `<div style="margin-top:16px">`;
+  html += `<b style="font-size:13px">${{monthKey}} の全異動一覧（${{moves.length}}件）</b>`;
+  html += mvBuildMovesTable(moves, chainDoctors);
+  html += `</div>`;
+
+  area.innerHTML = html;
+}}
+
+function mvBuildMovesTable(moves, highlightDoctors) {{
+  let html = '<table style="border-collapse:collapse;font-size:13px;width:100%;margin-top:8px">';
+  html += '<thead><tr style="background:#2C3E50;color:white">';
+  html += '<th style="padding:6px 12px;border:1px solid #555">先生名</th>';
+  html += '<th style="padding:6px 12px;border:1px solid #555">異動前の院</th>';
+  html += '<th style="padding:6px 12px;border:1px solid #555;width:24px"></th>';
+  html += '<th style="padding:6px 12px;border:1px solid #555">異動後の院</th>';
+  html += '</tr></thead><tbody>';
+  moves.forEach((m, i) => {{
+    const isChain = highlightDoctors && highlightDoctors.has(m.doctor);
+    const bg = isChain ? '#FFF9C4' : (i%2===0 ? 'white' : '#f8f9fa');
+    html += `<tr style="background:${{bg}}">`;
+    html += `<td style="padding:5px 12px;border:1px solid #ddd;font-weight:bold">${{isChain?'🔀 ':''}}${{m.doctor}}</td>`;
+    html += `<td style="padding:5px 12px;border:1px solid #ddd;color:#666">${{m.from}}</td>`;
+    html += `<td style="padding:5px 12px;border:1px solid #ddd;text-align:center;color:#B7950B;font-weight:bold">→</td>`;
+    html += `<td style="padding:5px 12px;border:1px solid #ddd">${{m.to}}</td>`;
+    html += '</tr>';
+  }});
+  html += '</tbody></table>';
+  return html;
 }}
 
 // Case C: 月次配属マップ
@@ -1911,7 +2126,6 @@ function mvDrawMonthMap() {{
   const monthIdx = MONTHS_LIST.indexOf(selMonth);
   const prevMonth = monthIdx > 0 ? MONTHS_LIST[monthIdx - 1] : null;
 
-  // その月の配属
   const curMap  = {{}};
   const prevMap = {{}};
   Object.entries(DOCTOR_STINTS).forEach(([doctor, stints]) => {{
@@ -1921,7 +2135,6 @@ function mvDrawMonthMap() {{
     }});
   }});
 
-  // テーブル生成
   const rows = Object.entries(curMap).sort((a,b) => a[1].localeCompare(b[1],'ja'));
   let html = `<p style="font-size:13px;color:#666;margin-bottom:8px"><b>${{selMonth}} 時点の配属一覧（${{rows.length}}名）</b></p>`;
   html += '<table style="border-collapse:collapse;font-size:13px;width:100%">';
