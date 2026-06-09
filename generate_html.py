@@ -1908,7 +1908,7 @@ def generate():
     <div class="kpi-value">{sum_pr + get_orangetwist_count(f"{y}/{m:02d}", ot_settings):,} 院</div>
   </div>
   <div class="kpi-card">
-    <div class="kpi-label">全拠点</div>
+    <div class="kpi-label">{LABEL_ALL}</div>
     <div class="kpi-value">{sum_all:,} 院</div>
   </div>
 </div>
@@ -2665,7 +2665,7 @@ function buildCompareTable(startKey, endKey) {{
   html += '<thead><tr>';
   html += '<th rowspan="2" style="vertical-align:middle">ブランド</th>';
   html += '<th colspan="3" style="text-align:center;background:#d35400">IR・広報用</th>';
-  html += '<th colspan="3" style="text-align:center;background:#1a5276">全拠点</th>';
+  html += '<th colspan="3" style="text-align:center;background:#1a5276">' + LABEL_ALL + '</th>';
   html += '</tr><tr>';
   html += '<th style="background:#d35400">' + startKey + '</th>';
   html += '<th style="background:#d35400">' + endKey + '</th>';
