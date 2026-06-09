@@ -51,6 +51,11 @@ HOUJIN_BRAND_EXCLUSIONS = {
     "医療法人社団 リッツ美容外科": {"brands": ["リッツ美容外科"],  "note": "※リッツ美容外科を除く"},
 }
 
+# 年月別サマリーで特定グループから除外するブランド
+HOUJIN_GROUP_EXCLUDE_BRANDS = {
+    "②3医療法人合計": ["湘南美容皮フ科"],  # 風林会の湘南美容皮フ科は①に加算するため②から除外
+}
+
 HOUJIN_GROUPS = [
     ("①6医療法人合計", ["医療法人 湘美会","医療法人社団 孝和会","医療法人社団 菜寿会","医療法人社団 愛恵会","医療法人社団 樹慶会","医療法人社団 リッツ美容外科","一般社団法人MASA","健美会","法人無し（個人開設）","個人/その他"]),
     ("②3医療法人合計", ["医療法人社団 風林会","医療法人 きびたき会","医療法人社団 百花会"]),
@@ -1236,6 +1241,7 @@ def build_all_monthly_data(df, target_brands, exclude_pr, brand_cols=None, exist
         jikei_row[LABEL_IR] = ir_sum
         # per houjin group totals
         for gname, members in HOUJIN_GROUPS:
+            excl_brands = HOUJIN_GROUP_EXCLUDE_BRANDS.get(gname, [])
             cnt = 0
             for _, row in df.iterrows():
                 brand = get_brand(row)
@@ -1244,16 +1250,21 @@ def build_all_monthly_data(df, target_brands, exclude_pr, brand_cols=None, exist
                     continue
                 if houjin not in members:
                     continue
+                if brand in excl_brands:
+                    continue
                 if check_active(row, me):
                     cnt += 1
             jikei_row[gname] = cnt
         # houjin group × brand × gyoutai counts
         for gname, members in HOUJIN_GROUPS:
+            excl_brands = HOUJIN_GROUP_EXCLUDE_BRANDS.get(gname, [])
             for _, row in df.iterrows():
                 if check_active(row, me):
                     houjin = str(row.get("法人名", "") or "").strip()
                     if houjin in members:
                         brand = get_brand(row)
+                        if brand in excl_brands:
+                            continue
                         gyoutai = str(row.get("業態", "") or "").strip()
                         key = f"{gname}|{brand}|{gyoutai}"
                         jikei_row[key] = jikei_row.get(key, 0) + 1
