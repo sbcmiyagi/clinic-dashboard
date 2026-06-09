@@ -32,6 +32,8 @@ TARGET_BRANDS = [
     "The Chelsea Clinic","Chelsea Aesthetics","Chelsea Asthetics","Gangnam Laser Clinic","Rochor Centre Clinic"
 ]
 EXCLUDE_PR = ["SBC東京医療大学付属クリニック","SBC東京接骨院","SBC BODY ARCHI"]
+# 院長履歴テーブルから除外するブランド（院長管理対象外）
+EXCLUDE_DIRECTOR_BRANDS = ["ゴリラクリニック"]
 OVERSEAS_KW = ["DS","DSS","RCC","WWFC","WWMG","SkinGo","Chelsea","ﾍﾞﾄﾅﾑ","Vietnam","Shoubikai"]
 HOUJIN_ORDER = [
     "医療法人 湘美会","医療法人社団 孝和会","医療法人社団 樹慶会","医療法人社団 愛恵会",
@@ -52,6 +54,7 @@ HOUJIN_BRAND_EXCLUSIONS = {
 HOUJIN_GROUPS = [
     ("①6医療法人合計", ["医療法人 湘美会","医療法人社団 孝和会","医療法人社団 菜寿会","医療法人社団 愛恵会","医療法人社団 樹慶会","医療法人社団 リッツ美容外科","一般社団法人MASA","健美会","法人無し（個人開設）","個人/その他"]),
     ("②3医療法人合計", ["医療法人社団 風林会","医療法人 きびたき会","医療法人社団 百花会"]),
+    ("医療法人社団 風林会", ["医療法人社団 風林会"]),
     ("③医療法人社団十二会", ["医療法人社団十二会"]),
     ("④2医療法人合計", ["医療法人社団美咲会","一般社団法人美央斗会"]),
     ("⑤㈻SBC東京医療大学附属", ["㈻SBC東京医療大学附属","学校法人 SBC東京医療大学"]),
@@ -63,6 +66,7 @@ HOUJIN_GROUPS = [
 
 JIKEI_BRAND_COLS = [
     ("湘南美容クリニック","美容外科・皮膚科"),("湘南美容クリニック","オンライン"),("湘南美容クリニック","スキンLab"),
+    ("湘南美容クリニック（ﾍﾞﾄﾅﾑ）",None),
     ("湘南歯科クリニック",None),("湘南AGAクリニック",None),("湘南美容皮フ科",None),("湘南皮膚科クリニック",None),
     ("SBC NEO Skin Clinic",None),("肌の青空クリニック",None),("湘南内科皮フ科クリニック",None),
     ("湘南美容皮フ科内科クリニック",None),("イテウォン",None),("湘南メディカル記念病院",None),
@@ -70,12 +74,12 @@ JIKEI_BRAND_COLS = [
     ("六本木レディース",None),("神奈川レディース",None),("リッツ美容外科",None),
     ("リゼクリニック",None),("ゴリラクリニック",None),("JUNCLINIC",None),
     ("SBC東京医療大学付属クリニック",None),("SBC東京接骨院",None),("SBC BODY ARCHI",None),
-    ("湘南美容クリニック（ﾍﾞﾄﾅﾑ）",None),("The Chelsea Clinic",None),("Chelsea Aesthetics",None),
+    ("The Chelsea Clinic",None),("Chelsea Aesthetics",None),
     ("Gangnam Laser Clinic",None),("SkinGo!",None),("Wen & Weng Family Clinic",None),("Rochor Centre Clinic",None),
 ]
 EXISTING_GROUP_END = 19
 LABEL_IR = "IR・広報用（除：Holdingsへの収益貢献なし、含：OrangeTwist）"
-LABEL_ALL = "全拠点"
+LABEL_ALL = "全拠点（グループ合計、除：OrangeTwist）"
 
 def load_houjin_settings():
     """Excelの「法人設定」シートから法人の並び順を読み込む。シートがない場合はデフォルト値を返す。"""
@@ -151,15 +155,19 @@ def load_past_director_data():
 
         result = {}
         current_info = {}  # {clinic_id: (director_name, "YYYY/MM")}
+        name_based = {}   # {正式名称: events} — 院IDなし行（col0=空）用
 
         for row_idx in range(2, len(raw)):
             row = raw.iloc[row_idx]
 
             clinic_id_val = row.iloc[0]  # TWE院ID = column A
-            if pd.isna(clinic_id_val): continue
-            try:
-                clinic_id = int(float(str(clinic_id_val)))
-            except: continue
+            use_name_key = pd.isna(clinic_id_val)  # 院IDなし → 正式名称キー
+            clinic_id = None
+            if not use_name_key:
+                try:
+                    clinic_id = int(float(str(clinic_id_val)))
+                except:
+                    continue
 
             events = []  # list of (date, director_name)
 
@@ -188,11 +196,12 @@ def load_past_director_data():
             current_start = to_ts(current_start_val)
             if current_dir and current_dir not in ("-", "", "nan") and current_start:
                 events.append((current_start, current_dir))
-                # D列の着任日を current_info に保存（YYYY/MM形式）
-                current_info[clinic_id] = (
-                    current_dir,
-                    f"{current_start.year}/{current_start.month:02d}"
-                )
+                if clinic_id is not None:
+                    # D列の着任日を current_info に保存（YYYY/MM形式）
+                    current_info[clinic_id] = (
+                        current_dir,
+                        f"{current_start.year}/{current_start.month:02d}"
+                    )
 
             # Sort and deduplicate
             if events:
@@ -200,9 +209,15 @@ def load_past_director_data():
                 for dt, name in events:
                     seen[dt] = name
                 events = sorted(seen.items(), key=lambda x: x[0])
-                result[clinic_id] = events
+                if use_name_key:
+                    # 院IDなし → col1の正式名称をキーとして name_based に追加
+                    clinic_name_key = str(row.iloc[1] if len(row) > 1 else "").strip()
+                    if clinic_name_key and clinic_name_key not in ("nan", ""):
+                        name_based[clinic_name_key] = events
+                else:
+                    result[clinic_id] = events
 
-        return result, current_info
+        return result, current_info, name_based
     except Exception:
         return {}, {}
 
@@ -235,7 +250,7 @@ def parse_director_from_detail(detail):
                 return clinic, True
     return None, False
 
-def build_director_pivot(doctor_df, clinic_df, past_data):
+def build_director_pivot(doctor_df, clinic_df, past_data, past_name_data=None):
     """院長履歴のピボットデータを構築（過去データ+人事通達データを統合）"""
     today = date.today()
 
@@ -246,6 +261,14 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
         months.append(f"{y}/{m:02d}")
         m += 1
         if m > 12: m = 1; y += 1
+
+    # 閉院日マップ: {院名: "YYYY/MM"} — この月の翌月以降スナップショットから除外
+    clinic_close_mk = {}
+    for _, row in clinic_df.iterrows():
+        name = str(row.get("正式名称", "") or "").strip()
+        d_close = to_ts(row.get("閉院日"))
+        if name and d_close is not None:
+            clinic_close_mk[name] = f"{d_close.year}/{d_close.month:02d}"
 
     # TWE表記 → 正式名称のマッピング（ブランド別候補対応）
     twe_to_fullname = {}   # {twe: 正式名称} 院ID昇順で先着優先（SBC湘南美容が最初に来るため正しいブランドを選択）
@@ -297,6 +320,11 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
             new_name = id_to_new_name.get(cid)
             if new_name and new_name not in past_by_name:
                 past_by_name[new_name] = events
+    # 院IDなし行（正式名称キー）をそのままマージ
+    if past_name_data:
+        for clinic_name, events in past_name_data.items():
+            if clinic_name not in past_by_name:
+                past_by_name[clinic_name] = events
 
     # Build monthly events index from doctor_df (2025/09+)
     events_by_month = {}
@@ -416,6 +444,17 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                 if director:
                     snapshot[clinic_name] = director
 
+        # 閉院済みの院を月次スナップショットから除外（閉院月の翌月以降は非表示）
+        for cname, cmk in clinic_close_mk.items():
+            if month_key > cmk:
+                snapshot.pop(cname, None)
+
+        # 院長履歴除外ブランドの院をスナップショットから除外（recent data上書き後に適用）
+        for cname in list(snapshot.keys()):
+            brand = clinic_to_brand.get(cname, "")
+            if brand in EXCLUDE_DIRECTOR_BRANDS:
+                snapshot.pop(cname, None)
+
         monthly_states[month_key] = snapshot
 
     # ── 院長履歴スナップショット比較による退職・昇格の自動補完 ──
@@ -463,13 +502,25 @@ def build_director_pivot(doctor_df, clinic_df, past_data):
                 promotion_events.setdefault(month_key, []).append(
                     {"doctor": doctor, "from": from_snap, "to": new_clinic, "kubun": kubun_snap})
 
+    # 除外ブランドの院長就任・退職イベントを除外（チェーン表示にも出ないようにする）
+    for mk in list(promotion_events.keys()):
+        promotion_events[mk] = [
+            e for e in promotion_events[mk]
+            if clinic_to_brand.get(e.get('to', ''), '') not in EXCLUDE_DIRECTOR_BRANDS
+        ]
+    for mk in list(resignation_events.keys()):
+        resignation_events[mk] = [
+            e for e in resignation_events[mk]
+            if clinic_to_brand.get(e.get('clinic', ''), '') not in EXCLUDE_DIRECTOR_BRANDS
+        ]
+
     return monthly_states, months, promotion_events, resignation_events
 
 def build_director_html(doctor_df, clinic_df, brand_cols):
     """院長履歴ピボットテーブルHTMLを生成"""
-    past_data, past_current_info = load_past_director_data()
+    past_data, past_current_info, past_name_data = load_past_director_data()
 
-    monthly_states, months, _, __ = build_director_pivot(doctor_df, clinic_df, past_data)
+    monthly_states, months, _, __ = build_director_pivot(doctor_df, clinic_df, past_data, past_name_data)
     if not months:
         return '<p style="color:#999">データがありません</p>'
 
@@ -480,6 +531,7 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     for _, row in clinic_df.iterrows():
         brand = get_brand(row)
         if brand not in target_brands: continue
+        if brand in EXCLUDE_DIRECTOR_BRANDS: continue  # 院長管理対象外ブランドを除外
         # Only include clinics that appear in director data
         name = str(row.get("正式名称","") or "").strip()
         if name and name not in seen:
@@ -513,6 +565,14 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             clinic_abbr_map[name] = abbr
         if name:
             clinic_active_map[name] = (flag == "開院")
+
+    # 閉院月マップ: {正式名称: "YYYY/MM"} — 閉院月の翌月以降をグレーアウト
+    clinic_close_month = {}
+    for _, row in clinic_df.iterrows():
+        name = str(row.get("正式名称", "") or "").strip()
+        d_close = to_ts(row.get("閉院日"))
+        if name and d_close is not None:
+            clinic_close_month[name] = f"{d_close.year}/{d_close.month:02d}"
 
     # 業態転換ペアを特定: {旧院名: (新院名, 業態転換年月)}
     conversion_map = {}    # 旧院名 → (新院名, 転換年月)
@@ -588,8 +648,8 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
 
         return current, start_month
 
-    def make_clinic_row(clinic, limit_before=None, limit_from=None, row_bg="white"):
-        """1院分の行HTMLを生成。limit_before=この月より後は空白、limit_from=この月より前は空白"""
+    def make_clinic_row(clinic, limit_before=None, limit_from=None, row_bg="white", close_month=None):
+        """1院分の行HTMLを生成。limit_before=この月より後は空白、limit_from=この月より前は空白、close_month=閉院月（翌月以降グレーアウト）"""
         prev_doctor = ""
         cid_val = clinic_id_map.get(clinic, "")
         # ① 現院長・就任時期
@@ -613,6 +673,10 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             if limit_from and mk < limit_from:
                 cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:#f0f0f0;font-size:12px"></td>'
                 continue
+            # 閉院後のグレーアウト（閉院月の翌月以降）
+            if close_month and mk > close_month:
+                cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:#d0d0d0;font-size:12px;text-align:center;color:#aaa" title="閉院済">🔴</td>'
+                continue
             doctor = monthly_states.get(mk, {}).get(clinic, "")
             changed = doctor and doctor != prev_doctor and prev_doctor != ""
             if not doctor:
@@ -628,13 +692,15 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     # ── ビュー1: 院ID順 ──
     rows_id = ""
     for clinic in clinics_sorted_main:
+        cm = clinic_close_month.get(clinic)
         if clinic in conversion_map:
             new_name, conv_month, same_id, old_id, new_id = conversion_map[clinic]
-            rows_id += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2")
+            rows_id += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2", close_month=cm)
             if new_name in clinics_with_data:
-                rows_id += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
+                rows_id += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5",
+                                           close_month=clinic_close_month.get(new_name))
         else:
-            rows_id += make_clinic_row(clinic)
+            rows_id += make_clinic_row(clinic, close_month=cm)
 
     # ── ビュー2: 業態転換グループ順 ──
     rows_group = ""
@@ -655,16 +721,18 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             f'background:#4A235A;color:white;font-size:11px;font-weight:bold">'
             f'業態転換 {conv_month}　{id_badge}</td></tr>'
         )
-        rows_group += make_clinic_row(old_clinic, limit_before=conv_month, row_bg="#D7BDE2")
+        rows_group += make_clinic_row(old_clinic, limit_before=conv_month, row_bg="#D7BDE2",
+                                      close_month=clinic_close_month.get(old_clinic))
         if new_name in clinics_with_data:
-            rows_group += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5")
+            rows_group += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5",
+                                          close_month=clinic_close_month.get(new_name))
         shown_in_group.add(old_clinic)
         shown_in_group.add(new_name)
 
     # 転換に関係ない院を院ID順で追加
     for clinic in clinics_sorted:
         if clinic not in shown_in_group and clinic in clinics_with_data:
-            rows_group += make_clinic_row(clinic)
+            rows_group += make_clinic_row(clinic, close_month=clinic_close_month.get(clinic))
 
     legend = '''<div style="display:flex;gap:12px;margin-bottom:8px;font-size:12px;align-items:center;flex-wrap:wrap">
       <span>凡例：</span>
@@ -672,13 +740,14 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       <span style="background:#D7BDE2;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換前</span>
       <span style="background:#F3E5F5;padding:2px 8px;border:1px solid #ddd;color:#6c3483">業態転換後</span>
       <span style="background:#f0f0f0;padding:2px 8px;border:1px solid #ddd;color:#999">対象外期間</span>
+      <span style="background:#d0d0d0;padding:2px 8px;border:1px solid #ddd;color:#aaa">🔴 閉院済</span>
       <span style="color:#ccc;padding:2px 8px;border:1px solid #ddd">―　記録なし</span>
       &nbsp;│&nbsp;
       <span>🔵 同ID引き継ぎ</span>
       <span>🔴 ID変更</span>
     </div>'''
 
-    toggle_btn = '''<div style="margin-bottom:8px;display:flex;gap:8px">
+    toggle_btn = '''<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button id="btnViewId" onclick="switchView('id')"
         style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#2C3E50;color:white;font-weight:bold">
         院ID順
@@ -686,6 +755,10 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       <button id="btnViewGroup" onclick="switchView('group')"
         style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
         業態転換グループ順
+      </button>
+      <button onclick="downloadDirectorCSV()"
+        style="padding:5px 14px;border-radius:16px;border:1px solid #27AE60;cursor:pointer;font-size:13px;background:#fff;color:#27AE60;font-weight:bold;margin-left:auto">
+        ⬇ CSVダウンロード
       </button>
     </div>
     <script>
@@ -696,6 +769,48 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       document.getElementById('btnViewId').style.color         = mode==='id'    ? 'white'   : '#333';
       document.getElementById('btnViewGroup').style.background = mode==='group' ? '#2C3E50' : '#ddd';
       document.getElementById('btnViewGroup').style.color      = mode==='group' ? 'white'   : '#333';
+    }
+    function downloadDirectorCSV() {
+      // 現在表示中のビューを取得
+      const viewId    = document.getElementById('dirViewId');
+      const viewGroup = document.getElementById('dirViewGroup');
+      const isIdView  = viewId.style.display !== 'none';
+      const table = isIdView ? viewId.querySelector('table') : viewGroup.querySelector('table');
+
+      const csvRows = [];
+
+      // ヘッダー行
+      const ths = table.querySelectorAll('thead th');
+      csvRows.push(Array.from(ths).map(th => escCsv(th.textContent.trim())).join(','));
+
+      // データ行（colspan行＝業態転換ヘッダーはスキップ）
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const tds = tr.querySelectorAll('td');
+        if (!tds.length) return;
+        if (tds.length === 1 && tds[0].hasAttribute('colspan')) return; // 業態転換区切り行
+        const cols = Array.from(tds).map(td => {
+          let txt = td.textContent.trim();
+          if (txt === '🔴') txt = '閉院済';
+          if (txt === '―') txt = '';
+          return escCsv(txt);
+        });
+        csvRows.push(cols.join(','));
+      });
+
+      function escCsv(s) { return '"' + s.replace(/"/g, '""') + '"'; }
+
+      // BOM付きUTF-8（Excel対応）
+      const csv  = '\\uFEFF' + csvRows.join('\\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      a.href     = url;
+      a.download = '院長履歴_' + today + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
     </script>'''
 
@@ -1130,6 +1245,21 @@ def build_all_monthly_data(df, target_brands, exclude_pr, brand_cols=None, exist
                         key = f"{gname}|{brand}|{gyoutai}"
                         jikei_row[key] = jikei_row.get(key, 0) + 1
 
+        # 特別加算: 風林会の「湘南美容皮フ科」を①6医療法人合計にも加算
+        _TARGET_GROUP = "①6医療法人合計"
+        _ADDON_HOUJIN  = "医療法人社団 風林会"
+        _ADDON_BRAND   = "湘南美容皮フ科"
+        _addon_cnt = 0
+        for _, row in df.iterrows():
+            houjin = str(row.get("法人名", "") or "").strip()
+            brand  = get_brand(row)
+            if houjin == _ADDON_HOUJIN and brand == _ADDON_BRAND and check_active(row, me):
+                gyoutai = str(row.get("業態", "") or "").strip()
+                key = f"{_TARGET_GROUP}|{brand}|{gyoutai}"
+                jikei_row[key] = jikei_row.get(key, 0) + 1
+                _addon_cnt += 1
+        jikei_row[_TARGET_GROUP] = jikei_row.get(_TARGET_GROUP, 0) + _addon_cnt
+
         # region_dom / region_ovs
         region_dom = []
         region_ovs = []
@@ -1213,7 +1343,7 @@ def build_timeseries_html(all_data, brand_cols=None):
         header1 += f'<th colspan="{len(combos)}" style="padding:4px 6px;border:1px solid #555;text-align:center;font-size:10px">{member_label}</th>'
     # 集計列（末尾）
     header1 += '<th rowspan="3" style="padding:4px 6px;border:1px solid #555;background:#1a5276;min-width:60px">既存G合計</th>'
-    header1 += '<th rowspan="3" style="padding:4px 6px;border:1px solid #555;background:#1a5276;min-width:60px">全拠点</th>'
+    header1 += f'<th rowspan="3" style="padding:4px 6px;border:1px solid #555;background:#1a5276;min-width:80px;white-space:normal;text-align:center">{LABEL_ALL}</th>'
     header1 += '<th rowspan="3" style="padding:4px 6px;border:1px solid #555;background:#8e44ad;color:white;min-width:70px;white-space:normal;text-align:center">IR・広報用（除：Holdingsへの収益貢献なし）</th>'
     header1 += '<th rowspan="3" style="padding:4px 6px;border:1px solid #555;background:#d35400;min-width:60px">OrangeTwist</th>'
     header1 += f'<th rowspan="3" style="padding:4px 6px;border:1px solid #555;background:#d35400;min-width:70px;white-space:normal;text-align:center">{LABEL_IR}</th>'
@@ -1262,7 +1392,7 @@ def build_timeseries_html(all_data, brand_cols=None):
 
         # 集計列（末尾）
         existing  = jikei.get("既存G合計", 0)
-        all_total = jikei.get("全拠点", 0)
+        all_total = jikei.get(LABEL_ALL, 0)
         excl_base = jikei.get("IR・広報用（除：Holdingsへの収益貢献なし）", 0)
         ot = jikei.get("OrangeTwist", ORANGE_TWIST_COUNT)
         ir = jikei.get(LABEL_IR, 0)
@@ -1444,6 +1574,34 @@ def generate():
         return f'<table style="border-collapse:collapse;width:100%;font-size:14px"><thead><tr>{headers}</tr></thead><tbody>{rows_html}</tbody></table>'
 
     brand_table = brand_table_html(brand_df)
+
+    # ── 業態別院数テーブル ──
+    gyoutai_counts = {}
+    for k, v in r1.items():
+        if "|" in k:
+            gt = k.split("|", 1)[1]
+            if not gt:
+                gt = "（未設定）"
+            gyoutai_counts[gt] = gyoutai_counts.get(gt, 0) + v["all"]
+    gyoutai_rows_sorted = sorted(gyoutai_counts.items(), key=lambda x: -x[1])
+    gyoutai_total_cnt = sum(v for _, v in gyoutai_rows_sorted)
+    _gt_rows_html = "".join(
+        f'<tr><td style="padding:6px 10px;border:1px solid #ddd">{g}</td>'
+        f'<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">{cnt}</td></tr>'
+        for g, cnt in gyoutai_rows_sorted
+    )
+    _gt_rows_html += (
+        f'<tr style="background:{C_ORANGE};color:white;font-weight:bold">'
+        f'<td style="padding:6px 10px;border:1px solid #ddd">合計</td>'
+        f'<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">{gyoutai_total_cnt}</td></tr>'
+    )
+    gyoutai_table_html_str = (
+        f'<table style="border-collapse:collapse;font-size:14px">'
+        f'<thead><tr>'
+        f'<th style="padding:8px 10px;background:{C_HEADER};color:white;border:1px solid #555;text-align:left">業態</th>'
+        f'<th style="padding:8px 10px;background:{C_HEADER};color:white;border:1px solid #555;text-align:left">院数</th>'
+        f'</tr></thead><tbody>{_gt_rows_html}</tbody></table>'
+    )
 
     # ── 国内/海外×法人表 ──
     # r2 から 国内/海外 それぞれのデータを取得
@@ -1644,7 +1802,8 @@ def generate():
 
     # ── ブランド別棒グラフ ──
     plot_df = brand_df[brand_df["ブランド"].isin([f"{b}({g})" if g else b for b,g in brand_cols])].copy()
-    fig2=px.bar(plot_df,x="全拠点",y="ブランド",orientation="h",height=550,color_discrete_sequence=[C_BLUE])
+    _bar_height = max(600, len(plot_df) * 35)
+    fig2=px.bar(plot_df,x="全拠点",y="ブランド",orientation="h",height=_bar_height,color_discrete_sequence=[C_BLUE])
     fig2.update_layout(yaxis=dict(autorange="reversed"),margin=dict(t=30))
     chart2_html = fig2.to_html(full_html=False, include_plotlyjs="cdn")
 
@@ -1653,8 +1812,8 @@ def generate():
     director_html = build_director_html(doctor_df, df, brand_cols)
 
     # ── 先生の異動データ ──
-    past_data_mv, _ = load_past_director_data()
-    monthly_states_mv, months_mv, promotion_events, resignation_events = build_director_pivot(doctor_df, df, past_data_mv)
+    past_data_mv, _, past_name_mv = load_past_director_data()
+    monthly_states_mv, months_mv, promotion_events, resignation_events = build_director_pivot(doctor_df, df, past_data_mv, past_name_mv)
     doctor_stints, all_clinics_list, _ = build_doctor_movement_data(monthly_states_mv, months_mv)
     doctor_stints_json     = json.dumps(doctor_stints, ensure_ascii=False).replace("'", "\\'")
     all_doctors_json       = json.dumps(sorted(doctor_stints.keys()), ensure_ascii=False)
@@ -1755,8 +1914,14 @@ def generate():
 <div id="brand" class="content active">
   <div class="box">
     <div class="section-title" id="brandTableTitle">{report_date} ブランド×業態</div>
-    <div id="brandTableContainer">
-      {brand_table}
+    <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">
+      <div id="brandTableContainer" style="flex:1;min-width:280px">
+        {brand_table}
+      </div>
+      <div style="flex-shrink:0">
+        <div style="font-weight:bold;font-size:14px;margin-bottom:8px;color:#2C3E50">業態別 院数</div>
+        {gyoutai_table_html_str}
+      </div>
     </div>
   </div>
   <div class="box" style="margin-top:20px">
