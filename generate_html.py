@@ -1035,22 +1035,17 @@ def build_history(df, target_brands, exclude_pr):
                         after_g = str(row.get("転換後業態","") or "").strip()
                         old_id = name_to_id.get(str(row.get("正式名称","") or "").strip())
                         new_id = name_to_id.get(after_n) if after_n else None
-                        if old_id is not None and new_id is not None and old_id == new_id:
-                            id_label = f"{old_id}（同ID）"
-                        elif old_id is not None and new_id is not None:
-                            id_label = f"{old_id} → {new_id}"
-                        elif old_id is not None:
-                            id_label = f"{old_id} → ?"
-                        else:
-                            id_label = "―"
+                        old_id_str = str(old_id) if old_id is not None else "―"
+                        new_id_str = str(new_id) if new_id is not None else "―"
                         convert.append({
-                            "転換前院名": row.get("正式名称",""), "転換前ブランド": brand,
-                            "転換前業態": before if before else "―", "　": "→",
-                            "転換後院名": after_n if after_n else "―",
-                            "転換後業態": after_g if after_g else "―",
-                            "院ID": id_label,
+                            "転換前院ID": old_id_str,
+                            "転換前名称": row.get("正式名称",""),
+                            "転換前ブランド": brand,
+                            "転換前業態": before if before else "―",
+                            "　": "⇒",
+                            "転換後院ID": new_id_str,
+                            "転換後名称": after_n if after_n else "―",
                             "法人名": str(row.get("法人名","") or ""),
-                            "国内／海外": get_region(row),
                             "業態転換日": conv_only.strftime("%Y/%m/%d"),
                         })
                 close_ref = d_close if d_close is not None else d_conv
