@@ -1855,7 +1855,7 @@ def generate():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>クリニック数ダッシュボード {report_date}</title>
+<title>クリニック数・ドクター異動ダッシュボード {report_date}</title>
 <style>
   body{{font-family:'Meiryo',sans-serif;margin:0;background:#f5f5f5;color:#333}}
   .header{{background:{C_HEADER};color:white;padding:20px 30px}}
@@ -1898,7 +1898,8 @@ def generate():
 </head>
 <body>
 <div class="header">
-  <h1>クリニック数ダッシュボード</h1>
+  <h1>クリニック数・ドクター異動ダッシュボード</h1>
+  <div style="font-size:12px;color:#aaa;margin-top:2px">毎月25日〜30日更新</div>
   <p>{report_date} 時点</p>
 </div>
 
