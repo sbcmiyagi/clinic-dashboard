@@ -991,6 +991,14 @@ def build_history(df, target_brands, exclude_pr):
     today = date.today()
     all_dates = pd.concat([df["開院日"].dropna(), df["MA日"].dropna(),
                            df["閉院日"].dropna(), df["業態転換日"].dropna()])
+    # 院名→院IDのマップ（院ID変更表示用）
+    name_to_id = {}
+    for _, r in df.iterrows():
+        n = str(r.get("正式名称","") or "").strip()
+        cid = r.get("院ID")
+        if n and pd.notna(cid):
+            try: name_to_id[n] = int(float(str(cid)))
+            except: pass
     data_max_year = int(all_dates.dt.year.max()) if not all_dates.empty else today.year
     hist_years = list(range(2025, max(data_max_year, today.year) + 1))
     result = {}
@@ -1025,11 +1033,22 @@ def build_history(df, target_brands, exclude_pr):
                         if not before or before=="nan": before = str(row.get("業態","") or "").strip()
                         after_n = str(row.get("転換後院名","") or "").strip()
                         after_g = str(row.get("転換後業態","") or "").strip()
+                        old_id = name_to_id.get(str(row.get("正式名称","") or "").strip())
+                        new_id = name_to_id.get(after_n) if after_n else None
+                        if old_id is not None and new_id is not None and old_id == new_id:
+                            id_label = f"{old_id}（同ID）"
+                        elif old_id is not None and new_id is not None:
+                            id_label = f"{old_id} → {new_id}"
+                        elif old_id is not None:
+                            id_label = f"{old_id} → ?"
+                        else:
+                            id_label = "―"
                         convert.append({
                             "転換前院名": row.get("正式名称",""), "転換前ブランド": brand,
                             "転換前業態": before if before else "―", "　": "→",
                             "転換後院名": after_n if after_n else "―",
                             "転換後業態": after_g if after_g else "―",
+                            "院ID": id_label,
                             "法人名": str(row.get("法人名","") or ""),
                             "国内／海外": get_region(row),
                             "業態転換日": conv_only.strftime("%Y/%m/%d"),
