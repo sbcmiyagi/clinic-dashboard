@@ -1600,20 +1600,20 @@ def generate():
     gyoutai_rows_sorted = sorted(gyoutai_counts.items(), key=lambda x: -x[1])
     gyoutai_total_cnt = sum(v for _, v in gyoutai_rows_sorted)
     _gt_rows_html = "".join(
-        f'<tr><td style="padding:6px 10px;border:1px solid #ddd">{g}</td>'
-        f'<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">{cnt}</td></tr>'
+        f'<tr><td style="padding:8px 14px;border:1px solid #ddd;font-size:14px">{g}</td>'
+        f'<td style="padding:8px 14px;border:1px solid #ddd;text-align:right;font-size:14px;font-weight:bold">{cnt}</td></tr>'
         for g, cnt in gyoutai_rows_sorted
     )
     _gt_rows_html += (
         f'<tr style="background:{C_ORANGE};color:white;font-weight:bold">'
-        f'<td style="padding:6px 10px;border:1px solid #ddd">合計</td>'
-        f'<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">{gyoutai_total_cnt}</td></tr>'
+        f'<td style="padding:8px 14px;border:1px solid #ddd;font-size:14px">合計</td>'
+        f'<td style="padding:8px 14px;border:1px solid #ddd;text-align:right;font-size:14px">{gyoutai_total_cnt}</td></tr>'
     )
     gyoutai_table_html_str = (
-        f'<table style="border-collapse:collapse;font-size:14px">'
+        f'<table style="border-collapse:collapse;width:100%">'
         f'<thead><tr>'
-        f'<th style="padding:8px 10px;background:{C_HEADER};color:white;border:1px solid #555;text-align:left">業態</th>'
-        f'<th style="padding:8px 10px;background:{C_HEADER};color:white;border:1px solid #555;text-align:left">院数</th>'
+        f'<th style="padding:10px 14px;background:{C_HEADER};color:white;border:1px solid #555;text-align:left;font-size:14px">業態</th>'
+        f'<th style="padding:10px 14px;background:{C_HEADER};color:white;border:1px solid #555;text-align:right;font-size:14px">院数</th>'
         f'</tr></thead><tbody>{_gt_rows_html}</tbody></table>'
     )
 
@@ -1914,7 +1914,7 @@ def generate():
 </div>
 
 <div class="tabs">
-  <div class="tab tab-brand active" onclick="showTab('brand',this)">📋 ブランド別 集計（月末時点）</div>
+  <div class="tab tab-brand active" onclick="showTab('brand',this)">📋 ブランド別・業態別集計（月末時点）</div>
   <div class="tab tab-region" onclick="showTab('region',this)">🌏 地域・法人別 集計（月末時点）</div>
   <div class="tab tab-houjin" onclick="showTab('houjin',this)">🏢 法人別集計（フィー計算）</div>
   <div class="tab tab-trend" onclick="showTab('trend',this)">📅 年月別 院数サマリー</div>
@@ -1929,11 +1929,11 @@ def generate():
   <div class="box">
     <div class="section-title" id="brandTableTitle">{report_date} ブランド×業態</div>
     <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">
-      <div id="brandTableContainer" style="flex:1;min-width:280px">
+      <div id="brandTableContainer" style="flex:0 0 auto;max-width:560px">
         {brand_table}
       </div>
-      <div style="flex-shrink:0">
-        <div style="font-weight:bold;font-size:14px;margin-bottom:8px;color:#2C3E50">業態別 院数</div>
+      <div style="flex:1;min-width:220px">
+        <div style="font-weight:bold;font-size:15px;margin-bottom:10px;color:#2C3E50;border-left:4px solid {C_BLUE};padding-left:8px">業態別 院数</div>
         {gyoutai_table_html_str}
       </div>
     </div>
