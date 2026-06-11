@@ -748,23 +748,35 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
                 bg = row_bg; color = "#333"; txt = doctor
             cells += f'<td style="padding:5px 8px;border:1px solid #ddd;background:{bg};color:{color};font-size:12px;white-space:nowrap;text-align:center">{txt}</td>'
             if doctor: prev_doctor = doctor
-        return f"<tr>{cells}</tr>"
+        return f"<tr data-orig-idx='__IDX__'>{cells}</tr>"
 
     # ── ビュー1: 院ID順 ──
     rows_id = ""
+    _row_idx_id = [0]  # ミュータブルカウンター
+
+    def add_row_id(html):
+        idx = _row_idx_id[0]; _row_idx_id[0] += 1
+        return html.replace("__IDX__", str(idx), 1)
+
     for clinic in clinics_sorted_main:
         cm = clinic_close_month.get(clinic)
         if clinic in conversion_map:
             new_name, conv_month, same_id, old_id, new_id = conversion_map[clinic]
-            rows_id += make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2", close_month=cm)
+            rows_id += add_row_id(make_clinic_row(clinic, limit_before=conv_month, row_bg="#D7BDE2", close_month=cm))
             if new_name in clinics_with_data:
-                rows_id += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5",
-                                           close_month=clinic_close_month.get(new_name))
+                rows_id += add_row_id(make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5",
+                                           close_month=clinic_close_month.get(new_name)))
         else:
-            rows_id += make_clinic_row(clinic, close_month=cm)
+            rows_id += add_row_id(make_clinic_row(clinic, close_month=cm))
 
     # ── ビュー2: 業態転換グループ順 ──
     rows_group = ""
+    _row_idx_grp = [0]
+
+    def add_row_grp(html):
+        idx = _row_idx_grp[0]; _row_idx_grp[0] += 1
+        return html.replace("__IDX__", str(idx), 1)
+
     shown_in_group = set()
     # 転換ペアをまとめて表示（旧院のIDでソート）
     conv_pairs = sorted(
@@ -778,22 +790,23 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
             else f'🔴 ID変更（{old_id} → {new_id}）'
         )
         rows_group += (
-            f'<tr><td colspan="{len(months)+4}" style="padding:4px 12px;'
+            f'<tr data-orig-idx="{_row_idx_grp[0]}"><td colspan="{len(months)+4}" style="padding:4px 12px;'
             f'background:#4A235A;color:white;font-size:11px;font-weight:bold">'
             f'業態転換 {conv_month}　{id_badge}</td></tr>'
         )
-        rows_group += make_clinic_row(old_clinic, limit_before=conv_month, row_bg="#D7BDE2",
-                                      close_month=clinic_close_month.get(old_clinic))
+        _row_idx_grp[0] += 1
+        rows_group += add_row_grp(make_clinic_row(old_clinic, limit_before=conv_month, row_bg="#D7BDE2",
+                                      close_month=clinic_close_month.get(old_clinic)))
         if new_name in clinics_with_data:
-            rows_group += make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5",
-                                          close_month=clinic_close_month.get(new_name))
+            rows_group += add_row_grp(make_clinic_row(new_name, limit_from=conv_month, row_bg="#F3E5F5",
+                                          close_month=clinic_close_month.get(new_name)))
         shown_in_group.add(old_clinic)
         shown_in_group.add(new_name)
 
     # 転換に関係ない院を院ID順で追加
     for clinic in clinics_sorted:
         if clinic not in shown_in_group and clinic in clinics_with_data:
-            rows_group += make_clinic_row(clinic, close_month=clinic_close_month.get(clinic))
+            rows_group += add_row_grp(make_clinic_row(clinic, close_month=clinic_close_month.get(clinic)))
 
     legend = '''<div style="display:flex;gap:12px;margin-bottom:8px;font-size:12px;align-items:center;flex-wrap:wrap">
       <span>凡例：</span>
@@ -941,28 +954,24 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       if(_dirCntSortDir !== 0) dirSortByCount();
     }
 
-    // 元の行順を保存（院ID順リセット用）
-    var _dirOrigOrder = {};
-    function _dirSaveOrder() {
-      ['dirViewId','dirViewGroup'].forEach(function(vId){
-        var tbody = document.querySelector('#'+vId+' tbody');
-        if(!tbody) return;
-        _dirOrigOrder[vId] = Array.from(tbody.querySelectorAll('tr'));
-      });
-    }
+    // 院ID順リセット（data-orig-idx属性で元の順番に戻す）
     function dirResetSort() {
       _dirCntSortDir = 0;
       document.querySelectorAll('.dirSortArrow').forEach(function(el){ el.textContent = '⇅'; });
       ['dirViewId','dirViewGroup'].forEach(function(vId){
         var tbody = document.querySelector('#'+vId+' tbody');
-        if(!tbody || !_dirOrigOrder[vId]) return;
-        _dirOrigOrder[vId].forEach(function(r){ tbody.appendChild(r); });
+        if(!tbody) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort(function(a,b){
+          return parseInt(a.getAttribute('data-orig-idx')||0) - parseInt(b.getAttribute('data-orig-idx')||0);
+        });
+        rows.forEach(function(r){ tbody.appendChild(r); });
       });
       document.getElementById('btnResetSort').style.display = 'none';
     }
 
     // ページ読み込み後に初期表示
-    setTimeout(function(){ _dirSaveOrder(); updateCountCol('3'); }, 0);
+    setTimeout(function(){ updateCountCol('3'); }, 0);
     function downloadDirectorCSV() {
       // 現在表示中のビューを取得
       const viewId    = document.getElementById('dirViewId');
