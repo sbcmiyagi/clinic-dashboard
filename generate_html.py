@@ -618,18 +618,19 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     # Build HTML table
     th_style = f'padding:6px 10px;border:1px solid #555;background:{C_HEADER};color:white;white-space:nowrap;font-size:12px'
 
-    # 左4列を固定（各列のleft位置を積算で指定）
-    W_ID   = 44   # 院ID列幅
-    W_NAME = 184  # 院名列幅
-    W_DIR  = 104  # 現院長列幅
-    W_DATE = 74   # 就任時期列幅
-    sticky = 'position:sticky;top:0;z-index:5;background:{C_HEADER}'
-    W_FLAG = 50   # 状態列幅
+    # 左列を固定（各列のleft位置を積算で指定）
+    W_ID    = 44   # 院ID列幅
+    W_FLAG  = 50   # 状態列幅
+    W_NAME  = 184  # 院名列幅
+    W_DIR   = 104  # 現院長列幅
+    W_DATE  = 74   # 就任時期列幅
+    W_COUNT = 64   # 交代回数列幅
     headers  = f'<th style="{th_style};position:sticky;top:0;left:0px;z-index:5;min-width:{W_ID}px">院ID</th>'
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID}px;z-index:5;min-width:{W_FLAG}px">状態</th>'
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG}px;z-index:5;min-width:{W_NAME}px">院名</th>'
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME}px;z-index:5;min-width:{W_DIR}px">現院長</th>'
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME+W_DIR}px;z-index:5;min-width:{W_DATE}px">就任時期</th>'
+    headers += f'<th id="hdrCount" style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME+W_DIR+W_DATE}px;z-index:5;min-width:{W_COUNT}px;background:#E67E22;cursor:pointer" title="クリックで降順/昇順ソート">交代回数<br><span style="font-size:10px;font-weight:normal">（N年以内）</span></th>'
     for mk in months:
         headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:80px">{mk}</th>'
 
@@ -666,6 +667,25 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
 
         return current, start_month
 
+    def count_changes(clinic, n_years, limit_before=None, limit_from=None):
+        """直近n年以内の院長交代回数を返す"""
+        today_obj = date.today()
+        # cutoffより前の月はカウント対象外
+        cy = today_obj.year - n_years
+        cutoff = f"{cy}/{today_obj.month:02d}"
+        prev = ""
+        count = 0
+        for mk in months:
+            if limit_before and mk >= limit_before: continue
+            if limit_from   and mk <  limit_from:  continue
+            doctor = monthly_states.get(mk, {}).get(clinic, "")
+            if mk >= cutoff:
+                if doctor and doctor != prev and prev != "":
+                    count += 1
+            if doctor:
+                prev = doctor
+        return count
+
     def make_clinic_row(clinic, limit_before=None, limit_from=None, row_bg="white", close_month=None):
         """1院分の行HTMLを生成。limit_before=この月より後は空白、limit_from=この月より前は空白、close_month=閉院月（翌月以降グレーアウト）"""
         prev_doctor = ""
@@ -689,6 +709,21 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
         cells += f'<td style="padding:5px 10px;border:1px solid #ddd;position:sticky;left:{W_ID+W_FLAG}px;background:{row_bg};font-size:12px;white-space:nowrap;color:{txt_col};z-index:1">{clinic}</td>'
         cells += f'<td style="padding:5px 10px;border:1px solid #ddd;position:sticky;left:{W_ID+W_FLAG+W_NAME}px;background:{row_bg};font-size:12px;font-weight:bold;color:{txt_col};z-index:1">{cur_dir}</td>'
         cells += f'<td style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:{W_ID+W_FLAG+W_NAME+W_DIR}px;background:{row_bg};font-size:11px;color:#888;text-align:center;z-index:1">{cur_start}</td>'
+        # 交代回数列（各期間のカウントをdata属性として埋め込み）
+        if is_active:
+            c1  = count_changes(clinic, 1,  limit_before, limit_from)
+            c2  = count_changes(clinic, 2,  limit_before, limit_from)
+            c3  = count_changes(clinic, 3,  limit_before, limit_from)
+            c5  = count_changes(clinic, 5,  limit_before, limit_from)
+            c10 = count_changes(clinic, 10, limit_before, limit_from)
+            cnt_bg = "#FFF9C4" if c3 >= 2 else row_bg
+            cells += (f'<td class="cnt-cell" data-c1="{c1}" data-c2="{c2}" data-c3="{c3}" data-c5="{c5}" data-c10="{c10}"'
+                      f' style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:{W_ID+W_FLAG+W_NAME+W_DIR+W_DATE}px;'
+                      f'background:{cnt_bg};font-size:13px;font-weight:bold;text-align:center;color:#333;z-index:1">{c3}</td>')
+        else:
+            cells += (f'<td class="cnt-cell" data-c1="0" data-c2="0" data-c3="0" data-c5="0" data-c10="0"'
+                      f' style="padding:5px 8px;border:1px solid #ddd;position:sticky;left:{W_ID+W_FLAG+W_NAME+W_DIR+W_DATE}px;'
+                      f'background:#e8e8e8;font-size:13px;text-align:center;color:#aaa;z-index:1"></td>')
         for mk in months:
             # 業態転換による表示範囲制限
             if limit_before and mk >= limit_before:
@@ -782,6 +817,28 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
         style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
         業態転換グループ順
       </button>
+      <span style="margin-left:16px;font-size:13px;color:#333">交代回数の集計期間：</span>
+      <select id="cntPeriod" onchange="updateCountCol(this.value)"
+        style="padding:4px 10px;border-radius:8px;border:1px solid #E67E22;font-size:13px;color:#333;cursor:pointer">
+        <option value="1">直近1年</option>
+        <option value="2">直近2年</option>
+        <option value="3" selected>直近3年</option>
+        <option value="5">直近5年</option>
+        <option value="10">直近10年</option>
+      </select>
+      <span id="cntFilterWrap" style="display:flex;align-items:center;gap:4px;font-size:13px;color:#333">
+        &nbsp;｜&nbsp;
+        <label><input type="checkbox" id="cntFilterChk" onchange="updateCountCol(document.getElementById('cntPeriod').value)">
+        &nbsp;<span id="cntFilterLbl">2回以上の院のみ表示</span></label>
+        <select id="cntThreshold" onchange="updateCountCol(document.getElementById('cntPeriod').value)"
+          style="padding:3px 8px;border-radius:6px;border:1px solid #ccc;font-size:12px">
+          <option value="1">1回以上</option>
+          <option value="2" selected>2回以上</option>
+          <option value="3">3回以上</option>
+          <option value="4">4回以上</option>
+          <option value="5">5回以上</option>
+        </select>
+      </span>
       <button onclick="downloadDirectorCSV()"
         style="padding:5px 14px;border-radius:16px;border:1px solid #27AE60;cursor:pointer;font-size:13px;background:#fff;color:#27AE60;font-weight:bold;margin-left:auto">
         ⬇ CSVダウンロード
@@ -796,6 +853,80 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       document.getElementById('btnViewGroup').style.background = mode==='group' ? '#2C3E50' : '#ddd';
       document.getElementById('btnViewGroup').style.color      = mode==='group' ? 'white'   : '#333';
     }
+
+    // 交代回数列の更新（期間切替・フィルター・ハイライト）
+    var _cntSortAsc = null; // null=未ソート, true=昇順, false=降順
+    function updateCountCol(years) {
+      var key = 'c' + years;
+      var thr = parseInt(document.getElementById('cntThreshold').value) || 2;
+      var filterOn = document.getElementById('cntFilterChk').checked;
+      // ヘッダーラベル更新
+      var hdrs = document.querySelectorAll('#hdrCount');
+      hdrs.forEach(function(h){ h.innerHTML = '交代回数<br><span style="font-size:10px;font-weight:normal">（直近'+years+'年）</span>'; });
+      // フィルターラベル更新
+      document.getElementById('cntFilterLbl').textContent = thr + '回以上の院のみ表示';
+      // 両テーブルのセル更新
+      ['dirViewId','dirViewGroup'].forEach(function(vId){
+        var tbl = document.getElementById(vId);
+        if(!tbl) return;
+        var rows = tbl.querySelectorAll('tbody tr');
+        rows.forEach(function(tr){
+          var cell = tr.querySelector('.cnt-cell');
+          if(!cell) return;
+          var val = parseInt(cell.getAttribute('data-'+key)) || 0;
+          // spanCell = 業態転換ヘッダー行はcnt-cellなし → skip済み
+          cell.textContent = (cell.getAttribute('data-c1') !== null && val !== undefined) ? (val === 0 ? '0' : String(val)) : '';
+          // 空白（閉院）の場合はそのまま
+          if(cell.getAttribute('data-c1') === '0' && cell.getAttribute('data-c10') === '0' && cell.getAttribute('data-c3') === '0') {
+            cell.textContent = '';
+            tr.style.display = (filterOn) ? 'none' : '';
+            return;
+          }
+          // ハイライト
+          if(val >= thr) {
+            cell.style.background = '#FFF9C4';
+            cell.style.color = '#c0392b';
+            cell.style.fontWeight = 'bold';
+          } else {
+            cell.style.background = '';
+            cell.style.color = '#333';
+            cell.style.fontWeight = 'normal';
+          }
+          // フィルター
+          if(filterOn) {
+            tr.style.display = (val >= thr) ? '' : 'none';
+          } else {
+            tr.style.display = '';
+          }
+        });
+      });
+    }
+
+    // ヘッダークリックでソート
+    document.addEventListener('DOMContentLoaded', function(){
+      document.querySelectorAll('#hdrCount').forEach(function(hdr){
+        hdr.addEventListener('click', function(){
+          var years = document.getElementById('cntPeriod').value;
+          var key = 'c' + years;
+          _cntSortAsc = (_cntSortAsc === false) ? true : false;
+          ['dirViewId','dirViewGroup'].forEach(function(vId){
+            var tbody = document.querySelector('#'+vId+' tbody');
+            if(!tbody) return;
+            var rows = Array.from(tbody.querySelectorAll('tr'));
+            rows.sort(function(a,b){
+              var ca = a.querySelector('.cnt-cell');
+              var cb = b.querySelector('.cnt-cell');
+              var va = ca ? (parseInt(ca.getAttribute('data-'+key))||0) : -1;
+              var vb = cb ? (parseInt(cb.getAttribute('data-'+key))||0) : -1;
+              return _cntSortAsc ? va - vb : vb - va;
+            });
+            rows.forEach(function(r){ tbody.appendChild(r); });
+          });
+        });
+      });
+      // 初期表示（3年）
+      updateCountCol('3');
+    });
     function downloadDirectorCSV() {
       // 現在表示中のビューを取得
       const viewId    = document.getElementById('dirViewId');
