@@ -45,6 +45,18 @@ HOUJIN_ORDER = [
 ]
 EXCLUDE_HOUJIN = ["学校法人 SBC東京医療大学","㈻SBC東京医療大学附属","医療法人 きびたき会","医療法人社団 百花会","SBC東京接骨院","株式会社 MG"]
 
+# 院名の表記ゆれ統一マップ（異なる表記 → 正式名称）
+CLINIC_NAME_ALIASES = {
+    "イテウォン南青山院":                  "イテウォンビューティークリニック南青山院",
+    "京都駅ビル院":                        "湘南美容クリニック京都駅ビル院",
+    "新宿アネックス24院":                  "湘南美容クリニック新宿アネックス24",
+    "新宿アネックス24":                    "湘南美容クリニック新宿アネックス24",
+    "湘南AGAクリニック 大阪院":            "湘南AGAクリニック大阪院",
+    "湘南美容皮フ科 札幌大通院":           "湘南美容皮フ科札幌大通院",
+    "湘南美容皮フ科 栄矢場町院":           "湘南美容皮フ科栄矢場町院",
+    "湘南美容皮フ科 渋谷公園通り院":      "湘南美容皮フ科渋谷公園通り院",
+}
+
 # 法人別集計から特定ブランドを除外する設定
 HOUJIN_BRAND_EXCLUSIONS = {
     "医療法人社団 樹慶会":       {"brands": ["神奈川レディース"], "note": "※神奈川レディース・神奈川ウィメンズを除く"},
@@ -327,8 +339,9 @@ def build_director_pivot(doctor_df, clinic_df, past_data, past_name_data=None):
     # 院IDなし行（正式名称キー）をそのままマージ
     if past_name_data:
         for clinic_name, events in past_name_data.items():
-            if clinic_name not in past_by_name:
-                past_by_name[clinic_name] = events
+            canonical = CLINIC_NAME_ALIASES.get(clinic_name, clinic_name)
+            if canonical not in past_by_name:
+                past_by_name[canonical] = events
 
     # Build monthly events index from doctor_df (2025/09+)
     events_by_month = {}
@@ -376,6 +389,7 @@ def build_director_pivot(doctor_df, clinic_df, past_data, past_name_data=None):
                         _ck = clinic if clinic in twe_to_clinics else (clinic[:-1] if clinic.endswith('院') else clinic)
                         if _ck in twe_to_clinics:
                             clinic = twe_to_clinics[_ck][0][0]  # 院ID最小（SBC湘南美容）を使用
+                        clinic = CLINIC_NAME_ALIASES.get(clinic, clinic)
 
                     if kubun == "退職":
                         # 退職クリニックを特定して記録（玉突き起点として使用）
@@ -421,7 +435,7 @@ def build_director_pivot(doctor_df, clinic_df, past_data, past_name_data=None):
                                     else:
                                         from_place = cands[0][0]
                                 else:
-                                    from_place = from_place_raw
+                                    from_place = CLINIC_NAME_ALIASES.get(from_place_raw, from_place_raw)
                             else:
                                 from_place = "（新任）"
                             promotion_events.setdefault(month_key, []).append({
