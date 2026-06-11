@@ -630,7 +630,7 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG}px;z-index:5;min-width:{W_NAME}px">院名</th>'
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME}px;z-index:5;min-width:{W_DIR}px">現院長</th>'
     headers += f'<th style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME+W_DIR}px;z-index:5;min-width:{W_DATE}px">就任時期</th>'
-    headers += f'<th id="hdrCount" style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME+W_DIR+W_DATE}px;z-index:5;min-width:{W_COUNT}px;background:#E67E22;cursor:pointer" title="クリックで降順/昇順ソート">交代回数<br><span style="font-size:10px;font-weight:normal">（N年以内）</span></th>'
+    headers += f'<th class="dirHdrCount" onclick="dirSortByCount()" style="{th_style};position:sticky;top:0;left:{W_ID+W_FLAG+W_NAME+W_DIR+W_DATE}px;z-index:5;min-width:{W_COUNT}px;background:#E67E22;cursor:pointer;user-select:none" title="クリックで降順/昇順ソート"><span class="dirCntLabel">交代回数</span><br><span style="font-size:10px;font-weight:normal">（直近3年）</span><br><span class="dirSortArrow" style="font-size:11px">⇅</span></th>'
     for mk in months:
         headers += f'<th style="{th_style};position:sticky;top:0;z-index:4;min-width:80px">{mk}</th>'
 
@@ -855,78 +855,89 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
     }
 
     // 交代回数列の更新（期間切替・フィルター・ハイライト）
-    var _cntSortAsc = null; // null=未ソート, true=昇順, false=降順
+    var _dirCntSortDir = 0; // 0=未ソート, 1=降順, -1=昇順
+    function _dirCntKey() {
+      return 'c' + (document.getElementById('cntPeriod').value || '3');
+    }
+
+    function dirSortByCount() {
+      var key = _dirCntKey();
+      // 降順→昇順→降順 とトグル（初回は降順）
+      _dirCntSortDir = (_dirCntSortDir === 1) ? -1 : 1;
+      var arrow = _dirCntSortDir === 1 ? '▼' : '▲';
+      var label = _dirCntSortDir === 1 ? '多い順' : '少ない順';
+      // ヘッダーの矢印を更新
+      document.querySelectorAll('.dirSortArrow').forEach(function(el){ el.textContent = arrow; });
+      // 両テーブルをソート
+      ['dirViewId','dirViewGroup'].forEach(function(vId){
+        var tbody = document.querySelector('#'+vId+' tbody');
+        if(!tbody) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort(function(a,b){
+          var ca = a.querySelector('.cnt-cell');
+          var cb = b.querySelector('.cnt-cell');
+          // cnt-cellがない行（業態転換区切り行など）は末尾へ
+          if(!ca && !cb) return 0;
+          if(!ca) return 1;
+          if(!cb) return -1;
+          var va = parseInt(ca.getAttribute('data-'+key)) || 0;
+          var vb = parseInt(cb.getAttribute('data-'+key)) || 0;
+          return _dirCntSortDir === 1 ? vb - va : va - vb;
+        });
+        rows.forEach(function(r){ tbody.appendChild(r); });
+      });
+    }
+
     function updateCountCol(years) {
       var key = 'c' + years;
       var thr = parseInt(document.getElementById('cntThreshold').value) || 2;
       var filterOn = document.getElementById('cntFilterChk').checked;
       // ヘッダーラベル更新
-      var hdrs = document.querySelectorAll('#hdrCount');
-      hdrs.forEach(function(h){ h.innerHTML = '交代回数<br><span style="font-size:10px;font-weight:normal">（直近'+years+'年）</span>'; });
+      document.querySelectorAll('.dirCntLabel').forEach(function(el){
+        el.textContent = '交代回数';
+      });
+      document.querySelectorAll('.dirHdrCount').forEach(function(h){
+        // 行数表示部分のspanだけ更新（矢印は維持）
+        var spans = h.querySelectorAll('span');
+        if(spans.length >= 2) spans[1].textContent = '（直近'+years+'年）';
+      });
       // フィルターラベル更新
       document.getElementById('cntFilterLbl').textContent = thr + '回以上の院のみ表示';
       // 両テーブルのセル更新
       ['dirViewId','dirViewGroup'].forEach(function(vId){
         var tbl = document.getElementById(vId);
         if(!tbl) return;
-        var rows = tbl.querySelectorAll('tbody tr');
-        rows.forEach(function(tr){
+        tbl.querySelectorAll('tbody tr').forEach(function(tr){
           var cell = tr.querySelector('.cnt-cell');
           if(!cell) return;
-          var val = parseInt(cell.getAttribute('data-'+key)) || 0;
-          // spanCell = 業態転換ヘッダー行はcnt-cellなし → skip済み
-          cell.textContent = (cell.getAttribute('data-c1') !== null && val !== undefined) ? (val === 0 ? '0' : String(val)) : '';
-          // 空白（閉院）の場合はそのまま
-          if(cell.getAttribute('data-c1') === '0' && cell.getAttribute('data-c10') === '0' && cell.getAttribute('data-c3') === '0') {
-            cell.textContent = '';
-            tr.style.display = (filterOn) ? 'none' : '';
+          // 閉院行（全期間0）は空白のまま
+          var isClosed = ['1','2','3','5','10'].every(function(y){ return (cell.getAttribute('data-c'+y)||'0')==='0'; });
+          if(isClosed && cell.style.background === 'rgb(232, 232, 232)') {
+            tr.style.display = filterOn ? 'none' : '';
             return;
           }
+          var val = parseInt(cell.getAttribute('data-'+key)) || 0;
+          cell.textContent = String(val);
           // ハイライト
           if(val >= thr) {
             cell.style.background = '#FFF9C4';
-            cell.style.color = '#c0392b';
+            cell.style.color      = '#c0392b';
             cell.style.fontWeight = 'bold';
           } else {
             cell.style.background = '';
-            cell.style.color = '#333';
+            cell.style.color      = '#333';
             cell.style.fontWeight = 'normal';
           }
           // フィルター
-          if(filterOn) {
-            tr.style.display = (val >= thr) ? '' : 'none';
-          } else {
-            tr.style.display = '';
-          }
+          tr.style.display = (filterOn && val < thr) ? 'none' : '';
         });
       });
+      // ソート中なら再ソート
+      if(_dirCntSortDir !== 0) dirSortByCount();
     }
 
-    // ヘッダークリックでソート
-    document.addEventListener('DOMContentLoaded', function(){
-      document.querySelectorAll('#hdrCount').forEach(function(hdr){
-        hdr.addEventListener('click', function(){
-          var years = document.getElementById('cntPeriod').value;
-          var key = 'c' + years;
-          _cntSortAsc = (_cntSortAsc === false) ? true : false;
-          ['dirViewId','dirViewGroup'].forEach(function(vId){
-            var tbody = document.querySelector('#'+vId+' tbody');
-            if(!tbody) return;
-            var rows = Array.from(tbody.querySelectorAll('tr'));
-            rows.sort(function(a,b){
-              var ca = a.querySelector('.cnt-cell');
-              var cb = b.querySelector('.cnt-cell');
-              var va = ca ? (parseInt(ca.getAttribute('data-'+key))||0) : -1;
-              var vb = cb ? (parseInt(cb.getAttribute('data-'+key))||0) : -1;
-              return _cntSortAsc ? va - vb : vb - va;
-            });
-            rows.forEach(function(r){ tbody.appendChild(r); });
-          });
-        });
-      });
-      // 初期表示（3年）
-      updateCountCol('3');
-    });
+    // ページ読み込み後に初期表示
+    setTimeout(function(){ updateCountCol('3'); }, 0);
     function downloadDirectorCSV() {
       // 現在表示中のビューを取得
       const viewId    = document.getElementById('dirViewId');
