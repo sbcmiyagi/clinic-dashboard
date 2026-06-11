@@ -817,6 +817,10 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
         style="padding:5px 14px;border-radius:16px;border:none;cursor:pointer;font-size:13px;background:#ddd;color:#333">
         業態転換グループ順
       </button>
+      <button id="btnResetSort" onclick="dirResetSort()"
+        style="padding:5px 14px;border-radius:16px;border:1px solid #888;cursor:pointer;font-size:13px;background:#fff;color:#555;display:none">
+        ↺ 院ID順に戻す
+      </button>
       <span style="margin-left:16px;font-size:13px;color:#333">交代回数の集計期間：</span>
       <select id="cntPeriod" onchange="updateCountCol(this.value)"
         style="padding:4px 10px;border-radius:8px;border:1px solid #E67E22;font-size:13px;color:#333;cursor:pointer">
@@ -866,8 +870,9 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       _dirCntSortDir = (_dirCntSortDir === 1) ? -1 : 1;
       var arrow = _dirCntSortDir === 1 ? '▼' : '▲';
       var label = _dirCntSortDir === 1 ? '多い順' : '少ない順';
-      // ヘッダーの矢印を更新
+      // ヘッダーの矢印を更新・リセットボタンを表示
       document.querySelectorAll('.dirSortArrow').forEach(function(el){ el.textContent = arrow; });
+      document.getElementById('btnResetSort').style.display = '';
       // 両テーブルをソート
       ['dirViewId','dirViewGroup'].forEach(function(vId){
         var tbody = document.querySelector('#'+vId+' tbody');
@@ -936,8 +941,28 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       if(_dirCntSortDir !== 0) dirSortByCount();
     }
 
+    // 元の行順を保存（院ID順リセット用）
+    var _dirOrigOrder = {};
+    function _dirSaveOrder() {
+      ['dirViewId','dirViewGroup'].forEach(function(vId){
+        var tbody = document.querySelector('#'+vId+' tbody');
+        if(!tbody) return;
+        _dirOrigOrder[vId] = Array.from(tbody.querySelectorAll('tr'));
+      });
+    }
+    function dirResetSort() {
+      _dirCntSortDir = 0;
+      document.querySelectorAll('.dirSortArrow').forEach(function(el){ el.textContent = '⇅'; });
+      ['dirViewId','dirViewGroup'].forEach(function(vId){
+        var tbody = document.querySelector('#'+vId+' tbody');
+        if(!tbody || !_dirOrigOrder[vId]) return;
+        _dirOrigOrder[vId].forEach(function(r){ tbody.appendChild(r); });
+      });
+      document.getElementById('btnResetSort').style.display = 'none';
+    }
+
     // ページ読み込み後に初期表示
-    setTimeout(function(){ updateCountCol('3'); }, 0);
+    setTimeout(function(){ _dirSaveOrder(); updateCountCol('3'); }, 0);
     function downloadDirectorCSV() {
       // 現在表示中のビューを取得
       const viewId    = document.getElementById('dirViewId');
