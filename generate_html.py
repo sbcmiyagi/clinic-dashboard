@@ -954,7 +954,7 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
       if(_dirCntSortDir !== 0) dirSortByCount();
     }
 
-    // 院ID順リセット（data-orig-idx属性で元の順番に戻す）
+    // 院ID順リセット（data-orig-idx で元の生成順に戻す）
     function dirResetSort() {
       _dirCntSortDir = 0;
       document.querySelectorAll('.dirSortArrow').forEach(function(el){ el.textContent = '⇅'; });
@@ -963,7 +963,13 @@ def build_director_html(doctor_df, clinic_df, brand_cols):
         if(!tbody) return;
         var rows = Array.from(tbody.querySelectorAll('tr'));
         rows.sort(function(a,b){
-          return parseInt(a.getAttribute('data-orig-idx')||0) - parseInt(b.getAttribute('data-orig-idx')||0);
+          var ia = parseInt(a.getAttribute('data-orig-idx'));
+          var ib = parseInt(b.getAttribute('data-orig-idx'));
+          // NaN（属性なし）は末尾へ
+          if(isNaN(ia) && isNaN(ib)) return 0;
+          if(isNaN(ia)) return 1;
+          if(isNaN(ib)) return -1;
+          return ia - ib;
         });
         rows.forEach(function(r){ tbody.appendChild(r); });
       });
